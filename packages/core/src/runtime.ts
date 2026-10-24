@@ -93,6 +93,7 @@ export class Kronos {
   backend!: ExecBackend;
   messaging?: MessagingBridge;
   private agents = new Map<string, Agent>();
+  private background = new Set<Promise<unknown>>();
   private agentDefsCache?: { cwd: string; defs: AgentDefinition[] };
   private skillStatsFile: string;
 
@@ -458,6 +459,17 @@ export class Kronos {
     return out;
   }
 
+  /** Track fire-and-forget work (titles, hooks) so close() can wait for it. */
+  track<T>(p: Promise<T>): Promise<T> {
+    const guarded = p.catch((e) => {
+      log.debug('background task failed', e);
+      return undefined as T;
+    });
+    this.background.add(guarded);
+    void guarded.finally(() => this.background.delete(guarded));
+    return guarded;
+  }
+
   newRequestId(): string {
     return newId('req_');
   }
@@ -465,6 +477,7 @@ export class Kronos {
   async close(): Promise<void> {
     this.cron.stop();
     for (const a of this.agents.values()) a.interrupt();
+    await Promise.race([Promise.allSettled([...this.background]), new Promise((r) => setTimeout(r, 5000))]);
     this.processes.killAll();
     await this.browser.close();
     await this.mcp.closeAll();

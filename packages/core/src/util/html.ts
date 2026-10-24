@@ -147,7 +147,11 @@ export function htmlToMarkdown(html: string, baseUrl?: string, opts: { keepChrom
           newline(2);
         } else {
           inPre += 1;
-          const lang = /class=["'][^"']*(?:language|lang)-([a-z0-9+#-]+)/i.exec(token)?.[1] ?? '';
+          const ahead = src.slice(tokenRe.lastIndex, tokenRe.lastIndex + 300);
+          const lang =
+            /class=["'][^"']*(?:language|lang)-([a-z0-9+#-]+)/i.exec(token)?.[1] ??
+            /^\s*<code\b[^>]*class=["'][^"']*(?:language|lang)-([a-z0-9+#-]+)/i.exec(ahead)?.[1] ??
+            '';
           newline(2);
           emit(`\`\`\`${lang}\n`);
         }

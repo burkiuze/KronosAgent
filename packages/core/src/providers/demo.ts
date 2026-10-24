@@ -116,6 +116,13 @@ function route(input: string, tools: Set<string>): Plan {
 
   if (!t) return { thinking: '', text: 'Hi! I am Kronos. How can I help?', calls: [] };
 
+  if (/\b(parallel|delegate|subagents?|paralel)\b/.test(lower) && has('delegate')) {
+    return {
+      thinking: 'Splitting the work across parallel subagents.',
+      text: 'Delegating to two subagents in parallel.',
+      calls: [call('delegate', { tasks: [{ task: 'List the files in the workspace and report the count', label: 'files' }, { task: 'Report the current date', label: 'date' }] })],
+    };
+  }
   if ((m = /^\$\s+(.+)$/s.exec(t)) || (m = /^(?:run|execute|çalıştır)\s+[`"]?(.+?)[`"]?$/is.exec(t))) {
     if (has('shell')) return { thinking: `The user wants to run a shell command: ${m[1]}`, text: 'Running it now.', calls: [call('shell', { command: m[1] })] };
   }
@@ -169,13 +176,6 @@ function route(input: string, tools: Set<string>): Plan {
       thinking: 'Creating a scheduled automation.',
       text: 'Scheduling it.',
       calls: [call('cron_create', { name: truncate(t, 40), schedule: 'every day at 9am', prompt: t })],
-    };
-  }
-  if (/\b(parallel|delegate|subagents?|paralel)\b/.test(lower) && has('delegate')) {
-    return {
-      thinking: 'Splitting the work across parallel subagents.',
-      text: 'Delegating to two subagents in parallel.',
-      calls: [call('delegate', { tasks: [{ task: 'List the files in the workspace and report the count', label: 'files' }, { task: 'Report the current date', label: 'date' }] })],
     };
   }
   if (/\b(date|time|saat|tarih)\b/.test(lower) && has('shell')) {

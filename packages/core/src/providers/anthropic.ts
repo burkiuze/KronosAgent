@@ -349,8 +349,10 @@ export function toAnthropicMessages(messages: Message[], supportsSystemMessages:
       const text = m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
       if (!text) continue;
       const prev = out[out.length - 1];
-      if (supportsSystemMessages && prev && prev.role === 'user') {
-        out.push({ role: 'system', content: text });
+      if (prev && prev.role === 'user') {
+        if (supportsSystemMessages) out.push({ role: 'system', content: text });
+        else if (Array.isArray(prev.content)) prev.content.push({ type: 'text', text: `<system-reminder>\n${text}\n</system-reminder>` });
+        else pendingNotes.push(text);
       } else {
         pendingNotes.push(text);
       }

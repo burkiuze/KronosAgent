@@ -580,10 +580,10 @@ export class Agent {
     const durationMs = Date.now() - started;
     this.emit({ type: 'run_end', runId, stopReason, text, usage, durationMs, error });
     if (this.rt.hooks.has('stop')) {
-      void this.rt.hooks.run('stop', { sessionId: this.session.id, stopReason, text: truncate(text, 4000) }, { cwd: this.session.cwd });
+      void this.rt.track(this.rt.hooks.run('stop', { sessionId: this.session.id, stopReason, text: truncate(text, 4000) }, { cwd: this.session.cwd }));
     }
     if (this.depth === 0 && this.rt.config.agent.autoTitle && (this.session.title === 'New conversation' || !this.session.title)) {
-      void this.autoTitle();
+      void this.rt.track(this.autoTitle());
     }
     return { runId, text, stopReason, usage, durationMs, error, toolCalls };
   }
