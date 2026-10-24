@@ -25,6 +25,26 @@ python3 -m http.server 8000
 The site is deployed on Vercel as a static project (no framework, no build command).
 Install commands on the page use the current domain automatically, so they stay correct on any custom domain.
 
+## Fonts
+
+The Hermes Agent site uses commercial typefaces (Rules Compressed / Rules Expanded and
+Collapse by Blaze Type, Mondwest by Pangram Pangram). Those files are licensed to Nous
+Research and are not redistributed here. The site self-hosts the closest open-source
+(SIL OFL) matches from `assets/fonts/`, with licenses in `assets/fonts/licenses/`:
+
+| Hermes typeface | Open-source stand-in | Used for |
+| --- | --- | --- |
+| Rules Compressed | Big Shoulders Display | Headlines, wordmark, buttons |
+| Rules Expanded | Lexend Giga | Uppercase labels and nav |
+| Collapse | Instrument Serif | Lede paragraphs |
+| Mondwest | Pixelify Sans | Small numerals |
+| JetBrains Mono | JetBrains Mono | Code |
+
+Every font stack in `styles.css` names the Hermes typeface first. After buying web licenses,
+drop the `.woff2` files into `assets/fonts/` and add matching `@font-face` rules named
+`Rules Compressed`, `Rules Expanded`, `Collapse` and `Mondwest`; the page switches over
+without other changes.
+
 ## Before launch
 
 - Replace `install.sh` / `install.ps1` with the real installers.

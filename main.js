@@ -8,7 +8,7 @@
   // Commands point at whatever host serves this page, so they stay right on any domain.
   const ORIGIN = /^https?:$/.test(location.protocol) ? location.origin : "https://kronos-agent.vercel.app";
 
-  // Social links under the logo. Until a URL is set, the icon points at the community footer.
+  // Social links in the header. Until a URL is set, the icon points at the community footer.
   const SOCIAL = { discord: "", x: "" };
   $$("[data-social]").forEach((a) => {
     const url = SOCIAL[a.dataset.social];
@@ -33,47 +33,38 @@
   burger.addEventListener("click", () => setMenu(menu.hidden));
   $$("a", menu).forEach((a) => a.addEventListener("click", () => setMenu(false)));
 
-  /* ───────────── hero: terminal / cloud ───────────── */
+  /* ───────────── install methods ───────────── */
 
-  const showPanel = (name) => {
-    $$(".action").forEach((btn) => {
-      const active = btn.dataset.panel === name;
-      btn.classList.toggle("is-active", active);
-      btn.setAttribute("aria-selected", String(active));
-    });
-    $("#panel-terminal").hidden = name !== "terminal";
-    $("#panel-cloud").hidden = name !== "cloud";
-  };
-  $$(".action").forEach((btn) => btn.addEventListener("click", () => showPanel(btn.dataset.panel)));
-  $$("[data-open-panel]").forEach((a) => a.addEventListener("click", () => showPanel(a.dataset.openPanel)));
-
-  const PLATFORMS = {
-    unix: {
+  const METHODS = {
+    terminal: {
       prompt: "$",
       cmd: `curl -fsSL ${ORIGIN}/install.sh | bash`,
-      note: "No prerequisites · Installs everything automatically · Free under the MIT license",
+      note: "macOS, Linux & WSL2 · No prerequisites",
     },
     windows: {
       prompt: "PS>",
       cmd: `iex (irm ${ORIGIN}/install.ps1)`,
-      note: "Run in PowerShell · Native Windows, no WSL required",
+      note: "Native Windows · Run in PowerShell",
     },
-    termux: {
+    cloud: {
       prompt: "$",
-      cmd: `pkg install -y curl && curl -fsSL ${ORIGIN}/install.sh | bash`,
-      note: "Run inside Termux on Android (aarch64)",
+      cmd: `ssh you@your-server 'curl -fsSL ${ORIGIN}/install.sh | bash'`,
+      note: "Any VPS, GPU box or sandbox · Talk to it from Telegram",
     },
   };
 
-  const setPlatform = (key) => {
-    const p = PLATFORMS[key];
-    $("#cmd-prompt").textContent = p.prompt;
-    $("#cmd-text").textContent = p.cmd;
-    $("#cmd-note").textContent = p.note;
-    $$(".os-tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.os === key));
+  const setMethod = (key) => {
+    const m = METHODS[key];
+    $("#cmd-prompt").textContent = m.prompt;
+    $("#cmd-text").textContent = m.cmd;
+    $("#cmd-note").textContent = m.note;
+    $$(".stack-btn").forEach((btn) => {
+      const active = btn.dataset.method === key;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-selected", String(active));
+    });
   };
-  $$(".os-tab").forEach((tab) => tab.addEventListener("click", () => setPlatform(tab.dataset.os)));
-  $("#cloud-text").textContent = `ssh you@your-server 'curl -fsSL ${ORIGIN}/install.sh | bash'`;
+  $$(".stack-btn").forEach((btn) => btn.addEventListener("click", () => setMethod(btn.dataset.method)));
 
   const ua = navigator.userAgent;
   const plat = navigator.platform || ua;
@@ -86,10 +77,10 @@
         : /Linux|X11/i.test(plat)
           ? "linux"
           : null;
-  setPlatform(os === "win" ? "windows" : os === "android" ? "termux" : "unix");
-  $(`.dcard[data-os="${os}"]`)?.classList.add("is-detected");
+  setMethod(os === "win" ? "windows" : "terminal");
+  $(`.dpanel[data-os="${os}"]`)?.classList.add("is-detected");
 
-  /* ───────────── copy buttons ───────────── */
+  /* ───────────── copy ───────────── */
 
   const copyText = async (text) => {
     try {
@@ -127,25 +118,65 @@
     });
   });
 
-  /* ───────────── features rail ───────────── */
+  /* ───────────── clocks & scheduled jobs ───────────── */
 
-  const rail = $("#rail");
-  const railBtns = $$(".rail-btn");
-  const updateRail = () => {
-    const max = rail.scrollWidth - rail.clientWidth - 2;
-    railBtns[0].disabled = rail.scrollLeft <= 2;
-    railBtns[1].disabled = rail.scrollLeft >= max;
+  const pad = (n) => String(n).padStart(2, "0");
+  const hms = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+  const DAY_FILTER = {
+    weekday: (day) => day >= 1 && day <= 5,
+    daily: () => true,
+    sunday: (day) => day === 0,
   };
-  railBtns.forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const card = rail.querySelector(".card");
-      const step = card ? card.getBoundingClientRect().width + parseFloat(getComputedStyle(rail).columnGap || 0) : 400;
-      rail.scrollBy({ left: Number(btn.dataset.rail) * step, behavior: reduceMotion ? "auto" : "smooth" });
-    })
-  );
-  rail.addEventListener("scroll", updateRail, { passive: true });
-  window.addEventListener("resize", updateRail);
-  updateRail();
+
+  // data-cron is "<kind> <spec>": "hourly MM" or "weekday|daily|sunday HH:MM"
+  const nextRun = (cron, now) => {
+    const [kind, spec] = cron.split(" ");
+    if (kind === "hourly") {
+      const d = new Date(now);
+      d.setMinutes(Number(spec), 0, 0);
+      if (d <= now) d.setHours(d.getHours() + 1);
+      return d;
+    }
+    const [h, m] = spec.split(":").map(Number);
+    for (let i = 0; i <= 7; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      d.setHours(h, m, 0, 0);
+      if (d > now && DAY_FILTER[kind](d.getDay())) return d;
+    }
+    return null;
+  };
+
+  const countdown = (ms) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const days = Math.floor(s / 86400);
+    const rest = `${pad(Math.floor((s % 86400) / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+    return days ? `${days}d ${rest}` : rest;
+  };
+
+  const jobs = $$("#jobs li").map((li) => ({ cron: li.dataset.cron, out: $(".job-in", li) }));
+  const dateEl = $("#clock-date");
+  const timeEl = $("#clock-time");
+  const bigClock = $("#big-clock");
+
+  const tick = () => {
+    const now = new Date();
+    const t = hms(now);
+    timeEl.textContent = t;
+    bigClock.textContent = t;
+    dateEl.textContent = now
+      .toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" })
+      .replace(/,/g, "");
+    jobs.forEach((job) => {
+      const next = nextRun(job.cron, now);
+      job.out.textContent = next ? countdown(next - now) : "—";
+    });
+  };
+  tick();
+  setInterval(tick, 1000);
+
+  $("#year").textContent = String(new Date().getFullYear());
 
   /* ───────────── reveal on scroll ───────────── */
 
@@ -166,8 +197,6 @@
   } else {
     reveals.forEach((el) => el.classList.add("is-in"));
   }
-
-  $("#year").textContent = String(new Date().getFullYear());
 
   /* ───────────── terminal demo ───────────── */
 
