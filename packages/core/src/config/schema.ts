@@ -1,0 +1,302 @@
+import type { Effort, PermissionMode } from '../types.js';
+
+export interface ProviderConfig {
+  apiKey?: string;
+  baseUrl?: string;
+  /** extra headers sent with every request */
+  headers?: Record<string, string>;
+  /** default models to show in pickers (custom providers) */
+  models?: string[];
+  enabled?: boolean;
+  /** Anthropic: use server-side refusal fallbacks when the model supports them */
+  serverFallbacks?: boolean;
+  /** Anthropic: ask the API to drop (not reject) thinking blocks whose prefix changed */
+  dropMismatchedThinking?: boolean;
+  /** Anthropic: prompt caching (on by default) */
+  promptCaching?: boolean;
+  /** OpenAI-compatible: label shown in UI */
+  label?: string;
+}
+
+export interface CustomProviderConfig extends ProviderConfig {
+  id: string;
+  label?: string;
+  baseUrl: string;
+  /** api dialect, defaults to openai */
+  api?: 'openai' | 'anthropic';
+}
+
+export interface McpServerConfig {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+  timeoutMs?: number;
+  /** only expose these tools (glob patterns) */
+  include?: string[];
+  exclude?: string[];
+}
+
+export interface HookConfig {
+  /** tool name glob (e.g. "shell", "write_*", "*") */
+  matcher?: string;
+  command: string;
+  timeoutMs?: number;
+}
+
+export interface PlatformConfigBase {
+  enabled?: boolean;
+  /** user ids allowed to talk to the agent; empty = pairing required */
+  allowedUsers?: string[];
+  /** profile to run this platform with */
+  profile?: string;
+  /** default chat for deliveries (cron, notifications) */
+  homeChat?: string;
+  /** permission mode for agent runs started from this platform */
+  mode?: PermissionMode;
+}
+
+export interface KronosConfig {
+  model: {
+    default: string;
+    fallbacks: string[];
+    effort: Effort;
+    thinking: boolean;
+    showThinking: boolean;
+    maxOutputTokens: number;
+    temperature?: number | null;
+    subagent?: string | null;
+    summary?: string | null;
+    vision?: string | null;
+  };
+  providers: Record<string, ProviderConfig>;
+  customProviders: CustomProviderConfig[];
+  agent: {
+    name: string;
+    maxIterations: number;
+    parallelTools: boolean;
+    autoTitle: boolean;
+    toolOutputLimit: number;
+    instructions: string;
+    personality: string;
+    language: string;
+    compaction: { enabled: boolean; threshold: number; keepRecentTurns: number };
+    subagents: { maxConcurrent: number; maxDepth: number; maxIterations: number };
+    nudges: { memoryEvery: number; skillAfterToolCalls: number };
+  };
+  toolsets: { enabled: string[]; disabled: string[] };
+  terminal: {
+    backend: 'local' | 'docker' | 'ssh';
+    cwd: string;
+    timeoutSec: number;
+    shell?: string;
+    docker: { image: string; workdir: string; extraArgs: string[]; network: boolean };
+    ssh: { host: string; user?: string; port?: number; key?: string; workdir?: string };
+  };
+  safety: {
+    mode: PermissionMode;
+    allow: string[];
+    deny: string[];
+    dangerousCommands: 'ask' | 'block' | 'allow';
+    workspaceOnly: boolean;
+    redactSecrets: boolean;
+    checkpoints: boolean;
+    protectedPaths: string[];
+  };
+  memory: {
+    enabled: boolean;
+    memoryCharLimit: number;
+    userCharLimit: number;
+    sessionSearch: boolean;
+    autoExtract: boolean;
+  };
+  skills: {
+    enabled: boolean;
+    dirs: string[];
+    disabled: string[];
+    autoCreate: boolean;
+    claudeCompat: boolean;
+  };
+  web: {
+    search: { provider: 'auto' | 'duckduckgo' | 'brave' | 'tavily' | 'exa' | 'searxng' | 'serper' | 'jina'; apiKey?: string; url?: string };
+    fetch: { maxChars: number; userAgent: string };
+  };
+  browser: { headless: boolean; executablePath?: string; viewport: { width: number; height: number } };
+  image: { provider: 'openai' | 'fal' | 'replicate' | 'none'; model: string; size: string };
+  voice: {
+    stt: 'openai' | 'groq' | 'none';
+    sttModel: string;
+    tts: 'openai' | 'elevenlabs' | 'browser' | 'none';
+    ttsModel: string;
+    voice: string;
+    autoSpeak: boolean;
+  };
+  gateway: {
+    host: string;
+    port: number;
+    token: string;
+    openaiApi: boolean;
+    cors: string[];
+    publicUrl: string;
+  };
+  platforms: {
+    telegram: PlatformConfigBase & { token?: string };
+    discord: PlatformConfigBase & { token?: string; channels?: string[]; mentionOnly?: boolean };
+    slack: PlatformConfigBase & { botToken?: string; appToken?: string };
+    matrix: PlatformConfigBase & { homeserver?: string; accessToken?: string; userId?: string };
+    whatsapp: PlatformConfigBase & { accessToken?: string; phoneNumberId?: string; verifyToken?: string };
+    signal: PlatformConfigBase & { apiUrl?: string; number?: string };
+    email: PlatformConfigBase & { smtpUrl?: string; from?: string; to?: string };
+    webhook: PlatformConfigBase & { secret?: string };
+    homeassistant: PlatformConfigBase & { url?: string; token?: string };
+  };
+  mcp: { servers: Record<string, McpServerConfig> };
+  hooks: {
+    preToolUse: HookConfig[];
+    postToolUse: HookConfig[];
+    userPromptSubmit: HookConfig[];
+    sessionStart: HookConfig[];
+    stop: HookConfig[];
+  };
+  cron: { enabled: boolean; timezone: string; maxConcurrent: number };
+  ui: {
+    theme: string;
+    mode: 'light' | 'dark' | 'system';
+    toolDisplay: 'product' | 'technical';
+    fontSize: number;
+    sendOnEnter: boolean;
+    showTokenUsage: boolean;
+    wallpaper: string;
+    density: 'comfortable' | 'compact';
+  };
+  updates: { channel: 'stable' | 'beta'; autoCheck: boolean };
+  telemetry: { enabled: boolean };
+}
+
+export const ALL_TOOLSETS = [
+  'files', 'shell', 'web', 'browser', 'code', 'memory', 'sessions', 'todo', 'clarify', 'delegate', 'skills',
+  'cron', 'image', 'vision', 'voice', 'artifacts', 'messaging', 'http', 'mcp',
+] as const;
+
+export function defaultConfig(): KronosConfig {
+  return {
+    model: {
+      default: 'auto',
+      fallbacks: [],
+      effort: 'high',
+      thinking: true,
+      showThinking: true,
+      maxOutputTokens: 64000,
+      temperature: null,
+      subagent: null,
+      summary: null,
+      vision: null,
+    },
+    providers: {
+      anthropic: { apiKey: '${ANTHROPIC_API_KEY}', serverFallbacks: true, dropMismatchedThinking: true, promptCaching: true },
+      openai: { apiKey: '${OPENAI_API_KEY}' },
+      openrouter: { apiKey: '${OPENROUTER_API_KEY}' },
+      gemini: { apiKey: '${GEMINI_API_KEY}' },
+      groq: { apiKey: '${GROQ_API_KEY}' },
+      deepseek: { apiKey: '${DEEPSEEK_API_KEY}' },
+      mistral: { apiKey: '${MISTRAL_API_KEY}' },
+      xai: { apiKey: '${XAI_API_KEY}' },
+      nvidia: { apiKey: '${NVIDIA_API_KEY}' },
+      together: { apiKey: '${TOGETHER_API_KEY}' },
+      fireworks: { apiKey: '${FIREWORKS_API_KEY}' },
+      cerebras: { apiKey: '${CEREBRAS_API_KEY}' },
+      nous: { apiKey: '${NOUS_API_KEY}' },
+      moonshot: { apiKey: '${MOONSHOT_API_KEY}' },
+      zai: { apiKey: '${ZAI_API_KEY}' },
+      ollama: { baseUrl: '${OLLAMA_HOST:-http://127.0.0.1:11434}' },
+      lmstudio: { baseUrl: '${LMSTUDIO_HOST:-http://127.0.0.1:1234}' },
+    },
+    customProviders: [],
+    agent: {
+      name: 'Kronos',
+      maxIterations: 120,
+      parallelTools: true,
+      autoTitle: true,
+      toolOutputLimit: 40000,
+      instructions: '',
+      personality: 'default',
+      language: 'auto',
+      compaction: { enabled: true, threshold: 0.8, keepRecentTurns: 2 },
+      subagents: { maxConcurrent: 4, maxDepth: 2, maxIterations: 60 },
+      nudges: { memoryEvery: 12, skillAfterToolCalls: 18 },
+    },
+    toolsets: { enabled: [...ALL_TOOLSETS], disabled: [] },
+    terminal: {
+      backend: 'local',
+      cwd: '',
+      timeoutSec: 180,
+      docker: { image: 'node:22-bookworm', workdir: '/workspace', extraArgs: [], network: true },
+      ssh: { host: '' },
+    },
+    safety: {
+      mode: 'ask',
+      allow: [],
+      deny: [],
+      dangerousCommands: 'ask',
+      workspaceOnly: false,
+      redactSecrets: true,
+      checkpoints: true,
+      protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '/etc/shadow'],
+    },
+    memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false },
+    skills: { enabled: true, dirs: [], disabled: [], autoCreate: true, claudeCompat: true },
+    web: {
+      search: { provider: 'auto' },
+      fetch: { maxChars: 60000, userAgent: 'Mozilla/5.0 (compatible; KronosAgent/1.0; +https://github.com/burkiuze/KronosAgent)' },
+    },
+    browser: { headless: true, viewport: { width: 1280, height: 800 } },
+    image: { provider: 'openai', model: 'gpt-image-1', size: '1024x1024' },
+    voice: { stt: 'openai', sttModel: 'whisper-1', tts: 'browser', ttsModel: 'gpt-4o-mini-tts', voice: 'alloy', autoSpeak: false },
+    gateway: { host: '127.0.0.1', port: 7777, token: '${KRONOS_GATEWAY_TOKEN}', openaiApi: true, cors: [], publicUrl: '' },
+    platforms: {
+      telegram: { enabled: false, token: '${TELEGRAM_BOT_TOKEN}', allowedUsers: [] },
+      discord: { enabled: false, token: '${DISCORD_BOT_TOKEN}', allowedUsers: [], mentionOnly: true },
+      slack: { enabled: false, botToken: '${SLACK_BOT_TOKEN}', appToken: '${SLACK_APP_TOKEN}', allowedUsers: [] },
+      matrix: { enabled: false, homeserver: '', accessToken: '${MATRIX_ACCESS_TOKEN}', userId: '', allowedUsers: [] },
+      whatsapp: { enabled: false, accessToken: '${WHATSAPP_ACCESS_TOKEN}', phoneNumberId: '', verifyToken: '${WHATSAPP_VERIFY_TOKEN}', allowedUsers: [] },
+      signal: { enabled: false, apiUrl: 'http://127.0.0.1:8080', number: '', allowedUsers: [] },
+      email: { enabled: false, smtpUrl: '${SMTP_URL}', from: '', to: '' },
+      webhook: { enabled: false, secret: '${KRONOS_WEBHOOK_SECRET}' },
+      homeassistant: { enabled: false, url: '', token: '${HASS_TOKEN}' },
+    },
+    mcp: { servers: {} },
+    hooks: { preToolUse: [], postToolUse: [], userPromptSubmit: [], sessionStart: [], stop: [] },
+    cron: { enabled: true, timezone: '', maxConcurrent: 2 },
+    ui: {
+      theme: 'kronos',
+      mode: 'system',
+      toolDisplay: 'product',
+      fontSize: 14,
+      sendOnEnter: true,
+      showTokenUsage: true,
+      wallpaper: 'aurora',
+      density: 'comfortable',
+    },
+    updates: { channel: 'stable', autoCheck: true },
+    telemetry: { enabled: false },
+  };
+}
+
+/** Settings sections used by every UI (desktop settings modal, CLI `config` help). */
+export const CONFIG_SECTIONS: { id: string; title: string; keys: string[]; description: string }[] = [
+  { id: 'model', title: 'Model', keys: ['model'], description: 'Default model, fallbacks, reasoning effort and thinking.' },
+  { id: 'chat', title: 'Chat', keys: ['agent'], description: 'Agent name, personality, instructions, iteration limits, compaction.' },
+  { id: 'appearance', title: 'Appearance', keys: ['ui'], description: 'Theme, color mode, tool call display and density.' },
+  { id: 'workspace', title: 'Workspace', keys: ['terminal'], description: 'Working directory and terminal backend (local, Docker, SSH).' },
+  { id: 'safety', title: 'Safety', keys: ['safety'], description: 'Permission mode, allow/deny rules, dangerous command handling, checkpoints.' },
+  { id: 'memory', title: 'Memory & Context', keys: ['memory'], description: 'Persistent memory, user profile, session search.' },
+  { id: 'voice', title: 'Voice', keys: ['voice'], description: 'Speech-to-text and text-to-speech.' },
+  { id: 'advanced', title: 'Advanced', keys: ['web', 'browser', 'image', 'cron', 'updates', 'telemetry'], description: 'Search provider, browser, image generation, cron and updates.' },
+  { id: 'gateway', title: 'Gateway', keys: ['gateway', 'platforms'], description: 'Server address, auth token, OpenAI-compatible API, messaging platforms.' },
+  { id: 'keys', title: 'API Keys', keys: ['providers', 'customProviders'], description: 'Provider API keys and custom OpenAI-compatible endpoints.' },
+  { id: 'tools', title: 'Skills & Tools', keys: ['toolsets', 'skills', 'hooks'], description: 'Enabled toolsets, skills directories and lifecycle hooks.' },
+  { id: 'mcp', title: 'MCP', keys: ['mcp'], description: 'Model Context Protocol servers.' },
+];

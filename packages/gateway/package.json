@@ -1,0 +1,26 @@
+{
+  "name": "@kronos/gateway",
+  "version": "1.0.0",
+  "description": "Kronos Agent gateway: REST + WebSocket server, desktop/web backend, OpenAI-compatible API and messaging platform adapters.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@kronos/core": "1.0.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

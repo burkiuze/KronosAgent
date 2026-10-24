@@ -1,0 +1,993 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type {
+  AgentEvent,
+  ChatRequest,
+  ClarifyRequest,
+  Message,
+  ModelInfo,
+  Part,
+  PermissionDecision,
+  PermissionMode,
+  PermissionRequest,
+  StopReason,
+  TextPart,
+  Todo,
+  ToolCallPart,
+  ToolResultPart,
+  ToolSpec,
+  Usage,
+  UserInput,
+} from '../types.js';
+import { addUsage, emptyUsage, messageText } from '../types.js';
+import type { Kronos } from '../runtime.js';
+import type { SessionRecord } from '../sessions/store.js';
+import type { ToolContext, ToolDefinition } from '../tools/types.js';
+import { resolveRisk } from '../tools/types.js';
+import type { AgentDefinition } from './definitions.js';
+import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
+import { PermissionPolicy, primaryArg } from '../safety/permissions.js';
+import { validateInput } from '../util/schema.js';
+import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError } from '../util/misc.js';
+import { estimateMessagesTokens, estimateTokens, redactSecrets, truncate, truncateMiddle } from '../util/text.js';
+import { costOf } from '../providers/catalog.js';
+import { logger } from '../util/log.js';
+
+const log = logger('agent');
+
+export interface AgentOptions {
+  runtime: Kronos;
+  session: SessionRecord;
+  surface?: string;
+  depth?: number;
+  definition?: AgentDefinition;
+  subagentContext?: string;
+  onPermission?: (req: PermissionRequest) => Promise<PermissionDecision>;
+  onClarify?: (req: ClarifyRequest) => Promise<string>;
+  /** non-interactive runs: approve "ask" actions automatically (cron in yolo-ish modes) */
+  autoApprove?: boolean;
+  preloadSkills?: string[];
+  toolFilter?: { only?: string[]; exclude?: string[] };
+}
+
+export interface AgentRunOptions {
+  model?: string;
+  signal?: AbortSignal;
+  maxIterations?: number;
+}
+
+export interface AgentRunResult {
+  runId: string;
+  text: string;
+  stopReason: StopReason;
+  usage: Usage;
+  durationMs: number;
+  error?: string;
+  toolCalls: number;
+}
+
+export interface DelegateTask {
+  task: string;
+  label?: string;
+  agent?: string;
+  model?: string;
+  toolsets?: string[];
+}
+
+export interface DelegateResult {
+  label: string;
+  ok: boolean;
+  text: string;
+  error?: string;
+  sessionId: string;
+  durationMs: number;
+  usage: Usage;
+}
+
+function textOf(parts: Part[]): string {
+  return parts
+    .filter((p): p is TextPart => p.type === 'text')
+    .map((p) => p.text)
+    .join('');
+}
+
+/**
+ * The Kronos agent loop: one instance per session. Streams model output, runs tools
+ * (parallel where safe) behind the permission policy and hooks, checkpoints file edits,
+ * compacts long histories, delegates to subagents and records usage.
+ */
+export class Agent {
+  readonly events = new Emitter<AgentEvent>();
+  session: SessionRecord;
+  mode: PermissionMode;
+  todos: Todo[] = [];
+  private messages: Message[];
+  private readonly rt: Kronos;
+  private readonly policy: PermissionPolicy;
+  private controller?: AbortController;
+  private running = false;
+  private currentRunId = '';
+  private pendingPermissions = new Map<string, (d: PermissionDecision) => void>();
+  private pendingClarify = new Map<string, (a: string) => void>();
+  private readFiles = new Set<string>();
+  private skillUses = new Map<string, number>();
+  private lastContextTokens = 0;
+  private prePlanMode: PermissionMode = 'auto-edit';
+  private tools: ToolDefinition[] = [];
+  private toolSpecs: ToolSpec[] = [];
+
+  constructor(readonly opts: AgentOptions) {
+    this.rt = opts.runtime;
+    this.session = opts.session;
+    this.mode = opts.session.mode ?? this.rt.config.safety.mode;
+    this.policy = new PermissionPolicy(this.rt.config.safety);
+    this.messages = this.rt.sessions.messages(this.session.id);
+    const saved = this.session.meta?.todos;
+    if (Array.isArray(saved)) this.todos = saved as Todo[];
+    const rules = this.session.meta?.allowRules;
+    if (Array.isArray(rules)) for (const r of rules) this.policy.allowForSession(String(r));
+  }
+
+  get id(): string {
+    return this.session.id;
+  }
+  get title(): string {
+    return this.session.title;
+  }
+  get isRunning(): boolean {
+    return this.running;
+  }
+  get depth(): number {
+    return this.opts.depth ?? 0;
+  }
+  history(): Message[] {
+    return [...this.messages];
+  }
+  pendingRequests(): { permissions: string[]; clarify: string[] } {
+    return { permissions: [...this.pendingPermissions.keys()], clarify: [...this.pendingClarify.keys()] };
+  }
+
+  private emit(e: AgentEvent): void {
+    this.events.emit(e);
+    this.rt.emitAgentEvent(this.session.id, e);
+  }
+
+  private notice(level: 'info' | 'warn' | 'error', text: string): void {
+    this.emit({ type: 'notice', runId: this.currentRunId, level, text });
+  }
+
+  private append(msgs: Message[]): void {
+    if (!msgs.length) return;
+    this.messages.push(...msgs);
+    this.rt.sessions.appendMessages(this.session.id, msgs);
+  }
+
+  private saveSession(patch: Partial<SessionRecord>): void {
+    const updated = this.rt.sessions.update(this.session.id, patch);
+    if (updated) this.session = { ...this.session, ...updated };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Frozen per-session context (system prompt + tools) — keeps prompt caches warm
+  // and the conversation append-only for providers that bind reasoning to it.
+  // ---------------------------------------------------------------------------
+
+  private resolveTools(): ToolDefinition[] {
+    const cfg = this.rt.config;
+    const enabled = cfg.toolsets.enabled.filter((t) => !cfg.toolsets.disabled.includes(t));
+    const only = this.opts.toolFilter?.only;
+    const exclude = [...(this.opts.toolFilter?.exclude ?? [])];
+    if (this.depth > 0) exclude.push('ask_user', 'exit_plan_mode');
+    if (this.depth >= cfg.agent.subagents.maxDepth) exclude.push('delegate');
+    return this.rt.tools.resolve(enabled, this.rt, { only, exclude });
+  }
+
+  private ensureContext(model: ModelInfo): void {
+    if (this.session.systemPrompt && this.session.toolNames) {
+      const names = new Set(this.session.toolNames);
+      this.tools = this.rt.tools.all().filter((t) => names.has(t.name) && (!t.available || t.available(this.rt) === null));
+      this.toolSpecs = this.rt.tools.specs(this.tools);
+      return;
+    }
+    this.tools = this.resolveTools();
+    this.toolSpecs = this.rt.tools.specs(this.tools);
+    const cfg = this.rt.config;
+    const preloaded = (this.opts.preloadSkills ?? [])
+      .map((name) => {
+        try {
+          return { name, content: this.rt.skills.read(name).content };
+        } catch {
+          return null;
+        }
+      })
+      .filter((x): x is { name: string; content: string } => x !== null);
+    const prompt = buildSystemPrompt({
+      agentName: cfg.agent.name,
+      surface: this.opts.surface ?? this.session.source.split(':')[0] ?? 'cli',
+      cwd: this.session.cwd,
+      model,
+      mode: this.mode,
+      backend: this.rt.backend.describe(),
+      toolNames: this.tools.map((t) => t.name),
+      soul: this.depth === 0 ? this.rt.soul() : undefined,
+      personality: cfg.agent.personality,
+      instructions: cfg.agent.instructions,
+      contextFiles: discoverContextFiles(this.session.cwd, this.rt.home),
+      memory: cfg.memory.enabled && this.tools.some((t) => t.name === 'memory') ? this.rt.memory.snapshot() : undefined,
+      skillsIndex: cfg.skills.enabled && this.tools.some((t) => t.name === 'skill_view') ? this.rt.skills.promptIndex() : undefined,
+      agentTypes: this.rt.agentDefinitions(this.session.cwd),
+      mcpInstructions: this.rt.mcp.instructions() || undefined,
+      subagent: this.depth > 0 ? { depth: this.depth, definition: this.opts.definition, context: this.opts.subagentContext } : undefined,
+      preloadedSkills: preloaded,
+      language: cfg.agent.language,
+    });
+    this.saveSession({ systemPrompt: prompt, toolNames: this.tools.map((t) => t.name) });
+  }
+
+  /** Rebuild the frozen context (new memory/skills/tools) — starts a new cache prefix. */
+  refreshContext(): void {
+    this.saveSession({ systemPrompt: undefined, toolNames: undefined });
+    this.session.systemPrompt = undefined;
+    this.session.toolNames = undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Controls
+  // ---------------------------------------------------------------------------
+
+  interrupt(): void {
+    this.controller?.abort();
+    for (const [id, resolve] of this.pendingPermissions) {
+      resolve({ decision: 'deny', feedback: 'interrupted' });
+      this.pendingPermissions.delete(id);
+    }
+    for (const [id, resolve] of this.pendingClarify) {
+      resolve('');
+      this.pendingClarify.delete(id);
+    }
+  }
+
+  respondPermission(requestId: string, decision: PermissionDecision): boolean {
+    const fn = this.pendingPermissions.get(requestId);
+    if (!fn) return false;
+    this.pendingPermissions.delete(requestId);
+    fn(decision);
+    return true;
+  }
+
+  respondClarify(requestId: string, answer: string): boolean {
+    const fn = this.pendingClarify.get(requestId);
+    if (!fn) return false;
+    this.pendingClarify.delete(requestId);
+    fn(answer);
+    return true;
+  }
+
+  setMode(mode: PermissionMode, note = true): void {
+    if (mode === this.mode) return;
+    const prev = this.mode;
+    if (mode === 'plan') this.prePlanMode = prev === 'plan' ? 'auto-edit' : prev;
+    this.mode = mode;
+    this.saveSession({ mode });
+    if (note && this.messages.length) {
+      const text =
+        mode === 'plan'
+          ? 'The user switched to PLAN MODE: read-only. Investigate, then present a plan with exit_plan_mode before changing anything.'
+          : `Permission mode changed from "${prev}" to "${mode}".${prev === 'plan' ? ' Plan mode is over — you may now make changes.' : ''}`;
+      this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text }], createdAt: Date.now(), meta: { kind: 'notice' } }]);
+    }
+  }
+
+  setModel(ref: string): ModelInfo {
+    const info = this.rt.providers.resolve(ref);
+    this.saveSession({ model: info.ref });
+    return info;
+  }
+
+  setTodos(todos: Todo[]): void {
+    this.todos = todos;
+    this.saveSession({ meta: { todos } });
+    this.emit({ type: 'todos', runId: this.currentRunId, todos });
+  }
+
+  noteRead(path: string): void {
+    this.readFiles.add(path);
+  }
+
+  noteSkillUse(name: string): void {
+    this.skillUses.set(name, (this.skillUses.get(name) ?? 0) + 1);
+    this.rt.recordSkillUse(name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Interactive requests
+  // ---------------------------------------------------------------------------
+
+  private async askPermission(req: Omit<PermissionRequest, 'requestId' | 'sessionId'>): Promise<PermissionDecision> {
+    const request: PermissionRequest = { ...req, requestId: newId('perm_'), sessionId: this.session.id };
+    if (!this.opts.onPermission) {
+      if (this.opts.autoApprove) return { decision: 'allow' };
+      return { decision: 'deny', feedback: 'No one is available to approve this action in a non-interactive run.' };
+    }
+    this.emit({ type: 'permission_request', runId: this.currentRunId, request });
+    const decision = await new Promise<PermissionDecision>((resolve) => {
+      this.pendingPermissions.set(request.requestId, resolve);
+      this.opts
+        .onPermission?.(request)
+        .then((d) => {
+          if (this.pendingPermissions.has(request.requestId)) {
+            this.pendingPermissions.delete(request.requestId);
+            resolve(d);
+          }
+        })
+        .catch(() => undefined);
+    });
+    this.emit({ type: 'permission_resolved', runId: this.currentRunId, requestId: request.requestId, decision: decision.decision });
+    return decision;
+  }
+
+  private async askClarify(question: string, options?: string[]): Promise<string> {
+    if (!this.opts.onClarify) return '';
+    const request: ClarifyRequest = { requestId: newId('ask_'), sessionId: this.session.id, question, options };
+    this.emit({ type: 'clarify_request', runId: this.currentRunId, request });
+    const answer = await new Promise<string>((resolve) => {
+      this.pendingClarify.set(request.requestId, resolve);
+      this.opts
+        .onClarify?.(request)
+        .then((a) => {
+          if (this.pendingClarify.has(request.requestId)) {
+            this.pendingClarify.delete(request.requestId);
+            resolve(a);
+          }
+        })
+        .catch(() => undefined);
+    });
+    this.emit({ type: 'clarify_resolved', runId: this.currentRunId, requestId: request.requestId, answer });
+    return answer;
+  }
+
+  async requestPlanApproval(plan: string): Promise<{ approved: boolean; feedback?: string }> {
+    const d = await this.askPermission({
+      toolCallId: '',
+      toolName: 'exit_plan_mode',
+      input: { plan },
+      summary: 'Approve the plan and start implementing',
+      risk: 'write',
+      reason: 'The agent finished planning and wants to start making changes.',
+    });
+    if (d.decision === 'deny') return { approved: false, feedback: d.feedback };
+    this.setMode(this.prePlanMode === 'plan' ? 'auto-edit' : this.prePlanMode, false);
+    return { approved: true };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------------------
+
+  private userTurnIndex(): number {
+    return this.messages.filter((m) => m.role === 'user' && m.meta?.kind !== 'summary').length;
+  }
+
+  async run(input: UserInput | string, opts: AgentRunOptions = {}): Promise<AgentRunResult> {
+    if (this.running) throw new Error('This agent is already running. Interrupt it or wait for it to finish.');
+    const inp: UserInput = typeof input === 'string' ? { text: input } : input;
+    this.running = true;
+    const runId = newId('r_');
+    this.currentRunId = runId;
+    const started = Date.now();
+    this.controller = new AbortController();
+    const onOuterAbort = () => this.controller?.abort();
+    opts.signal?.addEventListener('abort', onOuterAbort, { once: true });
+    const signal = this.controller.signal;
+
+    let runUsage = emptyUsage();
+    let finalText = '';
+    let stop: StopReason = 'end_turn';
+    let error: string | undefined;
+    let toolCallCount = 0;
+    let partialText = '';
+    const cfg = this.rt.config;
+    let model = this.rt.providers.resolve(opts.model ?? (this.session.model || undefined));
+    if (!this.session.model) this.saveSession({ model: model.ref });
+    this.emit({ type: 'run_start', runId, sessionId: this.session.id, model: model.ref });
+
+    try {
+      this.ensureContext(model);
+
+      // userPromptSubmit hook
+      let userText = inp.text;
+      if (this.rt.hooks.has('userPromptSubmit')) {
+        const h = await this.rt.hooks.run('userPromptSubmit', { sessionId: this.session.id, prompt: userText }, { cwd: this.session.cwd });
+        if (h.blocked) {
+          this.notice('warn', `Prompt blocked by hook: ${h.reason}`);
+          stop = 'end_turn';
+          finalText = '';
+          return this.finish(runId, started, finalText, stop, runUsage, undefined, 0);
+        }
+        if (h.context) userText += `\n\n<hook-context>\n${h.context}\n</hook-context>`;
+      }
+      const isFirstTurn = !this.messages.some((m) => m.role === 'user');
+      if (isFirstTurn && this.rt.hooks.has('sessionStart')) {
+        const h = await this.rt.hooks.run('sessionStart', { sessionId: this.session.id, cwd: this.session.cwd }, { cwd: this.session.cwd });
+        if (h.context) userText = `<session-context>\n${h.context}\n</session-context>\n\n${userText}`;
+      }
+
+      const userParts: Part[] = [];
+      if (userText) userParts.push({ type: 'text', text: userText });
+      for (const f of inp.files ?? []) userParts.push(f);
+      for (const img of inp.images ?? []) userParts.push(img);
+      const userMsg: Message = { id: newId('m_'), role: 'user', parts: userParts, createdAt: Date.now(), meta: inp.meta };
+      this.append([userMsg]);
+      this.emit({ type: 'message', runId, message: userMsg });
+
+      // learning-loop nudge
+      const turns = this.userTurnIndex();
+      const every = cfg.agent.nudges.memoryEvery;
+      if (cfg.memory.enabled && every > 0 && turns > 0 && turns % every === 0 && this.depth === 0) {
+        this.append([
+          {
+            id: newId('m_'),
+            role: 'system',
+            parts: [{ type: 'text', text: 'Periodic reminder: if this conversation revealed durable facts about the user, their preferences or the environment, save them with the memory tool (briefly) before continuing.' }],
+            createdAt: Date.now(),
+            meta: { kind: 'notice' },
+          },
+        ]);
+      }
+
+      const turn = turns;
+      let maxTokens = Math.min(cfg.model.maxOutputTokens, model.maxOutput || cfg.model.maxOutputTokens);
+      const maxIter = opts.maxIterations ?? cfg.agent.maxIterations;
+
+      for (let iter = 1; iter <= maxIter; iter += 1) {
+        if (signal.aborted) throw abortError();
+        await this.maybeCompact(model, runId, signal);
+        this.emit({ type: 'turn_start', runId, iteration: iter });
+        partialText = '';
+        const req: ChatRequest = {
+          model,
+          system: this.session.systemPrompt ?? '',
+          messages: this.messages,
+          tools: this.toolSpecs,
+          maxTokens,
+          effort: cfg.model.effort,
+          thinking: cfg.model.thinking,
+          showThinking: cfg.model.showThinking,
+          temperature: cfg.model.temperature ?? undefined,
+          signal,
+          sessionId: this.session.id,
+        };
+        const res = await this.rt.providers.chat(req, (e) => {
+          switch (e.type) {
+            case 'text':
+              partialText += e.text;
+              this.emit({ type: 'text_delta', runId, text: e.text });
+              break;
+            case 'thinking':
+              this.emit({ type: 'thinking_delta', runId, text: e.text });
+              break;
+            case 'tool_call_start':
+              this.emit({ type: 'tool_call_start', runId, id: e.id, name: e.name });
+              break;
+            case 'tool_call_delta':
+              this.emit({ type: 'tool_call_delta', runId, id: e.id, partialJson: e.partialJson });
+              break;
+            case 'notice':
+              this.notice(e.level, e.text);
+              break;
+          }
+        });
+        if (res.modelInfo.ref !== model.ref) model = res.modelInfo;
+
+        // usage + cost
+        const cost = res.usage.costUsd ?? costOf(res.modelInfo, res.usage);
+        const usage: Usage = { ...res.usage, costUsd: cost };
+        runUsage = addUsage(runUsage, usage);
+        this.saveSession({ usage: addUsage(this.session.usage ?? emptyUsage(), usage) });
+        const toolCalls = res.parts.filter((p): p is ToolCallPart => p.type === 'tool_call');
+        this.rt.sessions.logUsage({
+          ts: Date.now(), sessionId: this.session.id, model: res.modelInfo.ref, source: this.session.source,
+          inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens,
+          cacheWriteTokens: usage.cacheWriteTokens, costUsd: cost, toolCalls: toolCalls.length,
+        });
+        this.lastContextTokens = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens + usage.outputTokens;
+        this.emit({ type: 'usage', runId, usage, total: this.session.usage, contextTokens: this.lastContextTokens, contextWindow: model.contextWindow });
+
+        if (res.stopReason === 'max_tokens' && toolCalls.length) {
+          // a tool input was cut off: never run it; retry the turn with more room
+          if (maxTokens < (model.maxOutput || maxTokens)) {
+            maxTokens = Math.min(model.maxOutput, maxTokens * 2);
+            this.notice('warn', `Output limit reached mid tool call — retrying with max_tokens=${maxTokens}.`);
+            continue;
+          }
+          stop = 'max_tokens';
+          error = 'The model hit its output limit while writing a tool call.';
+          break;
+        }
+
+        const assistant: Message = {
+          id: newId('m_'),
+          role: 'assistant',
+          parts: res.parts,
+          createdAt: Date.now(),
+          model: res.modelInfo.ref,
+          usage,
+          stopReason: res.stopReason,
+        };
+        if (res.parts.length) {
+          this.append([assistant]);
+          this.emit({ type: 'message', runId, message: assistant });
+        }
+        partialText = '';
+
+        if (res.stopReason === 'refusal') {
+          stop = 'refusal';
+          finalText = textOf(res.parts);
+          this.notice('warn', `The model declined this request${res.refusal?.category ? ` (${res.refusal.category})` : ''}.${res.refusal?.explanation ? ` ${res.refusal.explanation}` : ''}`);
+          break;
+        }
+        if (res.stopReason === 'pause_turn') continue;
+        if (!toolCalls.length) {
+          finalText = textOf(res.parts);
+          stop = res.stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn';
+          break;
+        }
+
+        toolCallCount += toolCalls.length;
+        const results = await this.executeTools(toolCalls, runId, turn, signal);
+        const toolMsg: Message = { id: newId('m_'), role: 'tool', parts: results, createdAt: Date.now() };
+        this.append([toolMsg]);
+        this.emit({ type: 'message', runId, message: toolMsg });
+        if (signal.aborted) throw abortError();
+        if (iter === maxIter) {
+          stop = 'max_iterations';
+          finalText = textOf(res.parts);
+          this.notice('warn', `Stopped after ${maxIter} iterations. Say "continue" to keep going.`);
+        }
+      }
+
+      if (cfg.skills.autoCreate && toolCallCount >= cfg.agent.nudges.skillAfterToolCalls && this.depth === 0 && stop === 'end_turn') {
+        this.append([
+          {
+            id: newId('m_'),
+            role: 'system',
+            parts: [{ type: 'text', text: `The previous task took ${toolCallCount} tool calls. If it is a workflow likely to recur, consider capturing it as a skill (skill_manage create) or improving the skill you used.` }],
+            createdAt: Date.now(),
+            meta: { kind: 'notice' },
+          },
+        ]);
+      }
+    } catch (e) {
+      if (isAbortError(e) || signal.aborted) {
+        stop = 'interrupted';
+        this.repairAfterInterrupt(partialText);
+        finalText = partialText;
+      } else {
+        stop = 'error';
+        error = errorMessage(e);
+        log.error('run failed', e);
+        this.notice('error', error);
+      }
+    } finally {
+      opts.signal?.removeEventListener('abort', onOuterAbort);
+    }
+    return this.finish(runId, started, finalText, stop, runUsage, error, toolCallCount);
+  }
+
+  private finish(runId: string, started: number, text: string, stopReason: StopReason, usage: Usage, error: string | undefined, toolCalls: number): AgentRunResult {
+    this.running = false;
+    this.controller = undefined;
+    const durationMs = Date.now() - started;
+    this.emit({ type: 'run_end', runId, stopReason, text, usage, durationMs, error });
+    if (this.rt.hooks.has('stop')) {
+      void this.rt.hooks.run('stop', { sessionId: this.session.id, stopReason, text: truncate(text, 4000) }, { cwd: this.session.cwd });
+    }
+    if (this.depth === 0 && this.rt.config.agent.autoTitle && (this.session.title === 'New conversation' || !this.session.title)) {
+      void this.autoTitle();
+    }
+    return { runId, text, stopReason, usage, durationMs, error, toolCalls };
+  }
+
+  /** Keep history valid after an interrupt: keep partial text, answer dangling tool calls. */
+  private repairAfterInterrupt(partialText: string): void {
+    const last = this.messages[this.messages.length - 1];
+    if (last?.role === 'assistant') {
+      const calls = last.parts.filter((p): p is ToolCallPart => p.type === 'tool_call');
+      if (calls.length) {
+        this.append([
+          {
+            id: newId('m_'),
+            role: 'tool',
+            parts: calls.map((c) => ({ type: 'tool_result', toolCallId: c.id, toolName: c.name, content: 'Interrupted by the user before this tool finished.', isError: true })),
+            createdAt: Date.now(),
+            meta: { interrupted: true },
+          },
+        ]);
+      }
+    } else if (partialText.trim()) {
+      this.append([{ id: newId('m_'), role: 'assistant', parts: [{ type: 'text', text: `${partialText}\n\n[interrupted]` }], createdAt: Date.now(), meta: { interrupted: true } }]);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tools
+  // ---------------------------------------------------------------------------
+
+  private async executeTools(calls: ToolCallPart[], runId: string, turn: number, signal: AbortSignal): Promise<ToolResultPart[]> {
+    const results: (ToolResultPart | undefined)[] = new Array(calls.length);
+    const runnable: { index: number; call: ToolCallPart; def: ToolDefinition; input: Record<string, unknown> }[] = [];
+    const known = new Set(this.tools.map((t) => t.name));
+
+    // 1. validate + authorize sequentially (permission prompts are interactive)
+    for (const [index, call] of calls.entries()) {
+      const fail = (content: string) => {
+        results[index] = { type: 'tool_result', toolCallId: call.id, toolName: call.name, content, isError: true };
+        this.emit({ type: 'tool_result', runId, id: call.id, name: call.name, content, isError: true, durationMs: 0 });
+      };
+      const def = known.has(call.name) ? this.rt.tools.get(call.name) : undefined;
+      if (!def) {
+        this.emit({ type: 'tool_call', runId, id: call.id, name: call.name, input: call.input, summary: call.name, toolset: 'unknown' });
+        fail(`Unknown tool "${call.name}". Available tools: ${[...known].join(', ')}`);
+        continue;
+      }
+      if ('__raw' in call.input) {
+        this.emit({ type: 'tool_call', runId, id: call.id, name: call.name, input: call.input, summary: call.name, toolset: def.toolset });
+        fail(`INVALID_JSON: the tool arguments were not valid JSON: ${truncate(String(call.input.__raw), 300)}`);
+        continue;
+      }
+      const v = validateInput(def.parameters, call.input);
+      const input = v.value;
+      let summary = call.name;
+      try {
+        summary = def.summarize?.(input as never) ?? call.name;
+      } catch {
+        /* ignore */
+      }
+      this.emit({ type: 'tool_call', runId, id: call.id, name: call.name, input, summary, toolset: def.toolset });
+      if (!v.ok) {
+        fail(`Invalid arguments for ${call.name}: ${v.errors.join('; ')}`);
+        continue;
+      }
+      if (this.rt.hooks.has('preToolUse')) {
+        const h = await this.rt.hooks.run('preToolUse', { sessionId: this.session.id, toolName: call.name, input }, { toolName: call.name, cwd: this.session.cwd });
+        if (h.blocked) {
+          fail(`Blocked by a preToolUse hook: ${h.reason}`);
+          continue;
+        }
+      }
+      const risk = resolveRisk(def, input);
+      const check = this.policy.check({ name: call.name, toolset: def.toolset, risk, input, cwd: this.session.cwd }, this.mode);
+      if (check.action === 'deny') {
+        fail(`Permission denied: ${check.reason}`);
+        continue;
+      }
+      if (check.action === 'ask') {
+        const decision = await this.askPermission({ toolCallId: call.id, toolName: call.name, input, summary, risk, reason: check.reason, dangerous: check.dangerous });
+        if (decision.decision === 'deny') {
+          fail(`The user denied this action.${decision.feedback ? ` Their feedback: ${decision.feedback}` : ''} Do not retry it in another form; adjust your approach or ask.`);
+          continue;
+        }
+        if (decision.decision === 'allow_session' || decision.decision === 'allow_always') {
+          const rule = check.suggestedRule ?? call.name;
+          this.policy.allowForSession(rule);
+          this.saveSession({ meta: { allowRules: this.policy.sessionRules() } });
+          if (decision.decision === 'allow_always' && !check.dangerous) this.rt.addAllowRule(rule);
+        }
+      }
+      runnable.push({ index, call, def, input });
+    }
+
+    // 2. execute: parallel-safe calls concurrently, the rest in order
+    const exec = async (r: (typeof runnable)[number]) => {
+      results[r.index] = await this.runTool(r.call, r.def, r.input, runId, turn, signal);
+    };
+    const parallel = this.rt.config.agent.parallelTools ? runnable.filter((r) => r.def.parallelSafe) : [];
+    const sequential = runnable.filter((r) => !parallel.includes(r));
+    await mapLimit(parallel, 8, exec);
+    for (const r of sequential) {
+      if (signal.aborted) {
+        results[r.index] = { type: 'tool_result', toolCallId: r.call.id, toolName: r.call.name, content: 'Interrupted by the user.', isError: true };
+        continue;
+      }
+      await exec(r);
+    }
+    return results.map((r, i) => r ?? { type: 'tool_result', toolCallId: (calls[i] as ToolCallPart).id, toolName: (calls[i] as ToolCallPart).name, content: 'not executed', isError: true });
+  }
+
+  private async runTool(call: ToolCallPart, def: ToolDefinition, input: Record<string, unknown>, runId: string, turn: number, signal: AbortSignal): Promise<ToolResultPart> {
+    const started = Date.now();
+    const ctx: ToolContext = {
+      runtime: this.rt,
+      agent: this,
+      sessionId: this.session.id,
+      cwd: this.session.cwd,
+      signal,
+      toolCallId: call.id,
+      turn,
+      progress: (text) => this.emit({ type: 'tool_progress', runId, id: call.id, text }),
+      askUser: (q, options) => this.askClarify(q, options),
+      checkpoint: (path) => {
+        if (this.rt.config.safety.checkpoints) {
+          try {
+            this.rt.checkpoints.snapshot(this.session.id, turn, path, truncate(textOf(this.lastUserMessage()?.parts ?? []), 80));
+          } catch (e) {
+            log.warn('checkpoint failed', e);
+          }
+        }
+      },
+    };
+    let out;
+    try {
+      out = await def.execute(input as never, ctx);
+    } catch (e) {
+      out = { content: isAbortError(e) ? 'Interrupted by the user.' : `Error: ${errorMessage(e)}`, isError: true };
+    }
+    let content = out.content ?? '';
+    if (this.rt.config.safety.redactSecrets) content = redactSecrets(content);
+    const limit = this.rt.config.agent.toolOutputLimit;
+    let meta = out.meta;
+    if (content.length > limit) {
+      const file = join(this.rt.paths.outputs, `${call.name}-${call.id.slice(-8)}.txt`);
+      try {
+        mkdirSync(this.rt.paths.outputs, { recursive: true });
+        writeFileSync(file, content);
+      } catch {
+        /* ignore */
+      }
+      const t = truncateMiddle(content, limit);
+      content = `${t.text}\n\n[full output (${out.content.length.toLocaleString()} chars) saved to ${file} — read_file/grep it for details]`;
+      meta = { ...meta, truncated: true, fullOutputPath: file };
+    }
+    if (this.rt.hooks.has('postToolUse')) {
+      const h = await this.rt.hooks.run('postToolUse', { sessionId: this.session.id, toolName: call.name, input, output: truncate(content, 20_000), isError: Boolean(out.isError) }, { toolName: call.name, cwd: this.session.cwd });
+      if (h.context) content += `\n\n<hook-feedback>\n${h.context}\n</hook-feedback>`;
+      if (h.blocked) content += `\n\n<hook-feedback>\n${h.reason}\n</hook-feedback>`;
+    }
+    const durationMs = Date.now() - started;
+    const images = out.images?.length && this.supportsVision() ? out.images : undefined;
+    this.emit({ type: 'tool_result', runId, id: call.id, name: call.name, content, isError: Boolean(out.isError), durationMs, meta: { ...meta, durationMs }, images: out.images });
+    for (const a of meta?.artifacts ?? []) this.emit({ type: 'artifact', runId, artifact: { ...a, id: newId('a_') } });
+    return { type: 'tool_result', toolCallId: call.id, toolName: call.name, content, images, isError: Boolean(out.isError), meta: meta ? { ...meta, durationMs } : { durationMs } };
+  }
+
+  private supportsVision(): boolean {
+    const m = this.rt.providers.resolve(this.session.model || undefined);
+    return m.vision !== false;
+  }
+
+  private lastUserMessage(): Message | undefined {
+    for (let i = this.messages.length - 1; i >= 0; i -= 1) {
+      const m = this.messages[i] as Message;
+      if (m.role === 'user' && m.meta?.kind !== 'summary') return m;
+    }
+    return undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Context management
+  // ---------------------------------------------------------------------------
+
+  contextUsage(): { tokens: number; window: number; percent: number } {
+    const model = this.rt.providers.resolve(this.session.model || undefined);
+    const est = estimateMessagesTokens(this.messages) + estimateTokens(this.session.systemPrompt ?? '') + estimateTokens(JSON.stringify(this.toolSpecs));
+    const tokens = Math.max(est, this.lastContextTokens);
+    return { tokens, window: model.contextWindow, percent: Math.round((tokens / model.contextWindow) * 100) };
+  }
+
+  private async maybeCompact(model: ModelInfo, runId: string, signal: AbortSignal): Promise<void> {
+    const c = this.rt.config.agent.compaction;
+    if (!c.enabled || this.messages.length < 6) return;
+    const { tokens } = this.contextUsage();
+    if (tokens < model.contextWindow * c.threshold) return;
+    await this.compact(runId, signal);
+  }
+
+  /**
+   * Simple compaction: summarize the whole conversation into one message and start the
+   * next request from it (no earlier turns or reasoning blocks are replayed).
+   */
+  async compact(runId = this.currentRunId, signal?: AbortSignal, focus?: string): Promise<{ before: number; after: number }> {
+    const before = this.contextUsage().tokens;
+    const lastUser = this.lastUserMessage();
+    const transcript = this.renderTranscript(120_000);
+    const summaryModel = this.rt.providers.resolve(this.rt.config.model.summary || this.session.model || undefined);
+    const system =
+      'You are summarizing a conversation between a user and an autonomous AI agent so the agent can continue seamlessly in a fresh context. ' +
+      'Write a dense, structured summary with these sections: ## Goal (the user\'s overall objective and constraints), ## Progress (what has been done, ' +
+      'decisions made and why), ## Key facts (file paths, commands, URLs, identifiers, errors and their fixes, user preferences), ## Current state ' +
+      '(what is in progress, open problems), ## Next steps. Preserve exact names, paths and values. Do not invent anything.';
+    const res = await this.rt.providers.chat(
+      {
+        model: summaryModel,
+        system,
+        messages: [
+          {
+            id: newId('m_'),
+            role: 'user',
+            parts: [{ type: 'text', text: `${focus ? `Focus especially on: ${focus}\n\n` : ''}<transcript>\n${transcript}\n</transcript>\n\nWrite the summary now.` }],
+            createdAt: Date.now(),
+          },
+        ],
+        tools: [],
+        maxTokens: 8000,
+        effort: 'low',
+        thinking: false,
+        showThinking: false,
+        signal,
+      },
+      () => undefined,
+      [],
+    );
+    const summary = textOf(res.parts).trim() || truncate(transcript, 8000);
+    const latest = lastUser ? truncate(messageText(lastUser), 6000) : '';
+    const summaryMsg: Message = {
+      id: newId('m_'),
+      role: 'user',
+      parts: [
+        {
+          type: 'text',
+          text:
+            `<conversation_summary>\nThe earlier conversation was compacted to save context. Summary:\n\n${summary}\n</conversation_summary>` +
+            (latest ? `\n\nThe user's most recent request was:\n<latest_request>\n${latest}\n</latest_request>` : '') +
+            '\n\nContinue from here. Re-read files before editing them; do not assume their earlier contents.',
+        },
+      ],
+      createdAt: Date.now(),
+      meta: { kind: 'summary' },
+    };
+    this.messages = [summaryMsg];
+    this.rt.sessions.replaceMessages(this.session.id, this.messages);
+    this.lastContextTokens = 0;
+    const after = this.contextUsage().tokens;
+    this.emit({ type: 'compaction', runId, beforeTokens: before, afterTokens: after });
+    this.notice('info', `Context compacted: ~${before.toLocaleString()} → ~${after.toLocaleString()} tokens.`);
+    return { before, after };
+  }
+
+  private renderTranscript(maxChars: number): string {
+    const lines: string[] = [];
+    for (const m of this.messages) {
+      if (m.role === 'system') continue;
+      for (const p of m.parts) {
+        if (p.type === 'text' && p.text.trim()) lines.push(`${m.role.toUpperCase()}: ${p.text}`);
+        else if (p.type === 'tool_call') lines.push(`ASSISTANT → ${p.name}(${truncate(JSON.stringify(p.input), 600)})`);
+        else if (p.type === 'tool_result') lines.push(`TOOL ${p.toolName}${p.isError ? ' (error)' : ''}: ${truncate(p.content, 1500)}`);
+        else if (p.type === 'file') lines.push(`USER attached ${p.name}`);
+        else if (p.type === 'image') lines.push('USER attached an image');
+      }
+    }
+    const all = lines.join('\n\n');
+    return all.length > maxChars ? truncateMiddle(all, maxChars).text : all;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Undo / retry
+  // ---------------------------------------------------------------------------
+
+  /** Remove the last user turn (and everything after it) and restore files changed during it. */
+  undo(): { removed: number; restoredFiles: string[]; text: string } | null {
+    if (this.running) throw new Error('Cannot undo while running');
+    let idx = -1;
+    for (let i = this.messages.length - 1; i >= 0; i -= 1) {
+      const m = this.messages[i] as Message;
+      if (m.role === 'user' && m.meta?.kind !== 'summary') {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) return null;
+    const turn = this.messages.slice(0, idx).filter((m) => m.role === 'user' && m.meta?.kind !== 'summary').length;
+    const text = messageText(this.messages[idx] as Message);
+    const removed = this.messages.length - idx;
+    this.messages = this.messages.slice(0, idx);
+    this.rt.sessions.truncate(this.session.id, idx);
+    const restoredFiles = this.rt.config.safety.checkpoints ? this.rt.checkpoints.restore(this.session.id, turn) : [];
+    return { removed, restoredFiles, text };
+  }
+
+  async retry(opts: AgentRunOptions = {}): Promise<AgentRunResult | null> {
+    const u = this.undo();
+    if (!u) return null;
+    return this.run({ text: u.text }, opts);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Delegation
+  // ---------------------------------------------------------------------------
+
+  async delegate(tasks: DelegateTask[], opts: { context?: string; signal?: AbortSignal; parentToolCallId?: string } = {}): Promise<DelegateResult[]> {
+    const cfg = this.rt.config.agent.subagents;
+    if (this.depth >= cfg.maxDepth) throw new Error(`Maximum delegation depth (${cfg.maxDepth}) reached — do this work yourself.`);
+    const defs = this.rt.agentDefinitions(this.session.cwd);
+    return mapLimit(tasks, Math.max(1, cfg.maxConcurrent), async (t, i) => {
+      const def = defs.find((d) => d.name === (t.agent ?? 'general')) ?? defs.find((d) => d.name === 'general');
+      const label = t.label ?? `${def?.name ?? 'agent'} ${i + 1}`;
+      const agentId = newId('sub_');
+      const started = Date.now();
+      const modelRef = t.model ?? def?.model ?? this.rt.config.model.subagent ?? (this.session.model || undefined);
+      const session = this.rt.sessions.create({
+        title: `↳ ${label}`,
+        parentId: this.session.id,
+        cwd: this.session.cwd,
+        source: 'subagent',
+        profile: this.session.profile,
+        model: this.rt.providers.resolve(modelRef).ref,
+        mode: this.mode,
+      });
+      const only = t.toolsets?.length ? t.toolsets : def?.tools;
+      const child = this.rt.createAgent({
+        session,
+        surface: 'subagent',
+        depth: this.depth + 1,
+        definition: def,
+        subagentContext: opts.context,
+        onPermission: this.opts.onPermission
+          ? (req) => this.opts.onPermission!({ ...req, summary: `[${label}] ${req.summary}` })
+          : undefined,
+        autoApprove: this.opts.autoApprove,
+        toolFilter: only ? { only: [...only, 'todo_write', 'skill_view', 'skills_list', 'memory'] } : undefined,
+      });
+      this.emit({ type: 'subagent', runId: this.currentRunId, agentId, label, status: 'start', detail: truncate(t.task, 200) });
+      const off = child.events.on((e) => {
+        if (e.type === 'tool_call') this.emit({ type: 'subagent', runId: this.currentRunId, agentId, label, status: 'running', detail: e.summary });
+      });
+      try {
+        const r = await child.run({ text: t.task }, { signal: opts.signal, maxIterations: cfg.maxIterations });
+        const ok = r.stopReason !== 'error' && r.stopReason !== 'interrupted';
+        this.emit({ type: 'subagent', runId: this.currentRunId, agentId, label, status: ok ? 'done' : 'error', detail: r.error });
+        return { label, ok, text: r.text, error: r.error, sessionId: session.id, durationMs: Date.now() - started, usage: r.usage };
+      } catch (e) {
+        this.emit({ type: 'subagent', runId: this.currentRunId, agentId, label, status: 'error', detail: errorMessage(e) });
+        return { label, ok: false, text: '', error: errorMessage(e), sessionId: session.id, durationMs: Date.now() - started, usage: emptyUsage() };
+      } finally {
+        off();
+        this.rt.releaseAgent(session.id);
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Titles
+  // ---------------------------------------------------------------------------
+
+  private async autoTitle(): Promise<void> {
+    const firstUser = this.messages.find((m) => m.role === 'user' && m.meta?.kind !== 'summary');
+    if (!firstUser) return;
+    const firstText = messageText(firstUser).trim();
+    if (!firstText) return;
+    let title = '';
+    try {
+      const ref = this.rt.config.model.summary || this.rt.providers.smallModelRef(this.session.model || this.rt.providers.resolve().ref);
+      const res = await this.rt.providers.chat(
+        {
+          model: this.rt.providers.resolve(ref),
+          system: 'You write concise titles for conversations. Reply with a title of 2-6 words in the language of the conversation. No quotes, no trailing punctuation.',
+          messages: [{ id: 'x', role: 'user', parts: [{ type: 'text', text: truncate(firstText, 2000) }], createdAt: Date.now() }],
+          tools: [],
+          maxTokens: 64,
+          effort: 'low',
+          thinking: false,
+          showThinking: false,
+        },
+        () => undefined,
+        [],
+      );
+      title = textOf(res.parts).trim().replace(/^["'#\s]+|["'.\s]+$/g, '').split('\n')[0] ?? '';
+    } catch (e) {
+      log.debug('auto title failed', e);
+    }
+    if (!title) title = truncate(firstText.replace(/\s+/g, ' '), 48);
+    title = truncate(title, 80);
+    this.saveSession({ title });
+    this.rt.artifacts.renameSession(this.session.id, title);
+    this.emit({ type: 'title', runId: this.currentRunId, sessionId: this.session.id, title });
+  }
+
+  rename(title: string): void {
+    this.saveSession({ title });
+    this.rt.artifacts.renameSession(this.session.id, title);
+    this.emit({ type: 'title', runId: this.currentRunId, sessionId: this.session.id, title });
+  }
+}
+
+export { primaryArg };

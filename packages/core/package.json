@@ -1,0 +1,26 @@
+{
+  "name": "@kronos/core",
+  "version": "1.0.0",
+  "description": "Kronos Agent core runtime: agent loop, providers, tools, memory, skills, sessions, cron, MCP.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
+    "yaml": "^2.9.1"
+  }
+}
