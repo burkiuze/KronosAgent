@@ -1,8 +1,8 @@
 /* ───────────────────────── Kronos Agent ───────────────────────── */
 
 :root {
-  --bg: #0d0e23;
-  --bg-2: #111230;
+  --bg: #0f112b;
+  --bg-2: #14163a;
   --panel: #090a1c;
   --frame: #2626ea;
   --ink: #f1f1f1;
@@ -876,7 +876,7 @@ code {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: linear-gradient(180deg, rgba(13, 14, 35, 0.22), rgba(13, 14, 35, 0.08) 50%, rgba(13, 14, 35, 0.45));
+  background: linear-gradient(180deg, rgba(15, 17, 43, 0.22), rgba(15, 17, 43, 0.08) 50%, rgba(15, 17, 43, 0.45));
 }
 
 .dcard:hover::before {
@@ -899,7 +899,7 @@ code {
   line-height: 0.9;
   letter-spacing: -0.01em;
   color: #fff;
-  text-shadow: 0 2px 30px rgba(13, 14, 35, 0.45);
+  text-shadow: 0 2px 30px rgba(15, 17, 43, 0.45);
 }
 
 .dcard-btn {
