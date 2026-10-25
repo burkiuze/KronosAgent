@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import YAML from 'yaml';
-import type { EffortSetting, PermissionMode } from '../types.js';
+import type { EffortSetting, Message, PermissionMode } from '../types.js';
 import type { Kronos } from '../runtime.js';
 import { runShell } from '../util/process.js';
 
@@ -189,6 +189,8 @@ export interface RunEvalOptions {
   createRuntime: (cfg: EvalConfig, home: string) => Promise<Kronos>;
   repeats?: number;
   onRun?: (record: EvalRunRecord, progress: { done: number; total: number }) => void;
+  /** receives each run's full trajectory (every message and tool call) before its runtime is discarded */
+  onTrajectory?: (record: EvalRunRecord, messages: Message[]) => void;
   signal?: AbortSignal;
 }
 
@@ -208,12 +210,14 @@ export async function runEvalSuite(suite: EvalSuite, configs: EvalConfig[], opts
         mkdirSync(ws, { recursive: true });
         let record: EvalRunRecord;
         let rt: Kronos | undefined;
+        let trajectory: Message[] = [];
         try {
           if (c.files) writeFiles(ws, c.files);
           rt = await opts.createRuntime(cfg, home);
           const timeout = AbortSignal.timeout(suite.timeoutSec * 1000);
           const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
           const res = await rt.runHeadless(c.prompt, { source: 'eval', cwd: ws, mode: c.mode ?? 'yolo', autoApprove: true, model: cfg.model, signal });
+          if (opts.onTrajectory) trajectory = rt.sessions.messages(res.sessionId);
           const checks = await runChecks(c.checks, ws, res.text, res.toolCalls);
           const tokens = res.usage.inputTokens + res.usage.outputTokens + res.usage.cacheReadTokens + res.usage.cacheWriteTokens;
           record = {
@@ -235,6 +239,7 @@ export async function runEvalSuite(suite: EvalSuite, configs: EvalConfig[], opts
           rmSync(root, { recursive: true, force: true });
         }
         runs.push(record);
+        if (opts.onTrajectory) opts.onTrajectory(record, trajectory);
         opts.onRun?.(record, { done: runs.length, total });
       }
     }

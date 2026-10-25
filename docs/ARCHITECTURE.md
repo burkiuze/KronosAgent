@@ -104,6 +104,14 @@ Key properties:
   review, capture what is reusable. Its on/off state is restored from history.
 - **Idle agents are capped** (8, LRU); everything they hold is persisted, so an evicted session
   rebuilds its agent on the next message.
+- **Watchdog** (`agent/watchdog.ts`): the same call failing with the same input 3 times gets a
+  plain note to change approach; 6 times ends the run (`stalled`). An identical read repeated 4
+  times in one run is flagged too. Commands, checks and polling are exempt.
+- **Budget**: `agent.budget` caps tokens, cost or minutes per run; reaching it ends the run cleanly
+  (`budget`) with the last answer kept, and "continue" resumes.
+- **Unchanged reads**: re-reading the same range of a file that has not changed, while the earlier
+  output is still in context, returns a pointer to it instead of the whole file. Compaction and
+  undo invalidate this (the earlier output is gone); any file write clears it.
 
 ## Providers (`providers/`)
 
@@ -118,7 +126,10 @@ Key properties:
   for tests).
 - `registry.ts` — `provider:model` references, aliases (`opus`, `sonnet`, `gpt`, `gemini`,
   `hermes`, `local`, …), `auto` selection by configured keys, retries with backoff for
-  retryable errors and a fallback chain (`model.fallbacks`).
+  retryable errors and a fallback chain (`model.fallbacks`). A **circuit breaker** skips a
+  provider for 60 s after 3 failed requests in a row (outages only, not rejected requests) when
+  the chain has an alternative. When an attempt is retried or falls back after it already
+  streamed output, a `restart` signal makes clients discard the partial text first.
 - `catalog.ts` — model metadata: context window, output limit, tool/vision support, pricing
   (for cost tracking).
 
@@ -187,7 +198,8 @@ Secrets in tool output are redacted when `safety.redactSecrets` is on.
 - **WebSocket** `/ws`: clients `subscribe` to sessions and send `chat`, `stop`, `unqueue`,
   `permission`, `clarify`, `set_mode`, `set_model`; the server streams `agent` events, session
   updates, config changes, cron and platform status. The `Hub` serialises runs per session and
-  queues follow-ups.
+  queues follow-ups. Token deltas are **coalesced** per session (merged and sent at most every
+  32 ms, flushed before any other event) and broadcasts are encoded once for all clients.
 - **Terminal** `/ws/terminal`: a real PTY via a small Python `pty` bridge (resize over a side
   channel), falling back to `script` or pipes.
 - **OpenAI-compatible** `/v1/models`, `/v1/chat/completions` (streaming and non-streaming): the
@@ -221,6 +233,129 @@ Secrets in tool output are redacted when `safety.redactSecrets` is on.
   active_profile
 ```
 
+## Process model
+
+```mermaid
+flowchart LR
+  subgraph Desktop["Desktop app (Electron)"]
+    direction TB
+    Main["main process<br/>Kronos runtime + Gateway<br/>(loopback, per-launch token)"]
+    Renderer["renderer (sandboxed)<br/>React UI"]
+    Preload["preload bridge<br/>window.kronosDesktop"]
+    Renderer --- Preload --- Main
+  end
+  CLI["kronos (CLI/REPL)<br/>runtime in-process"] -.-> Disk
+  Browser["browser tab<br/>same React UI"] -- "HTTP + WS" --> GW
+  Renderer -- "HTTP + WS" --> Main
+  GW["kronos gateway<br/>runtime + HTTP/WS<br/>platforms + cron"] --> Disk[("~/.kronos<br/>config · .env · sessions.db<br/>memories · skills · cron")]
+  Main --> Disk
+  Chat["Telegram · Discord · Slack · …"] <--> GW
+  GW --> Models["model providers<br/>(Anthropic, OpenAI-compatible, local)"]
+  Main --> Models
+```
+
+- **One runtime per process.** The CLI embeds it for a session; `kronos gateway` and the desktop
+  app run it long-lived with the HTTP/WebSocket server, messaging platforms and the cron
+  scheduler. Every UI (desktop renderer, browser tab) is a thin client of a gateway.
+- **The desktop renderer is sandboxed** (context isolation, no Node). It talks to the embedded
+  gateway over loopback with a per-launch token; the preload exposes only notifications, badges,
+  folder pickers and menu/tray commands. A window hidden to the tray is destroyed after 10 minutes
+  and rebuilt on demand; messages meant for it are delivered once the new page has loaded.
+- **Child processes** are spawned only for work: shell commands and background processes, code
+  execution, the PTY bridge, MCP stdio servers, Playwright's browser (loaded on first use).
+
+## Lifecycle of a message
+
+```mermaid
+sequenceDiagram
+  participant UI as UI (store)
+  participant Hub as Gateway Hub
+  participant A as Agent
+  participant P as Provider registry
+  participant T as Tools
+  UI->>Hub: ws chat {sessionId?, text}
+  Hub->>Hub: create session / queue if a run is active
+  Hub->>A: run(input)
+  A->>A: frozen system prompt (first run) · notes (Codemaster, nudges)
+  loop until end_turn, stop, budget or watchdog
+    A->>A: budget check · compaction if context > threshold
+    A->>P: chat(request) with retries → fallback → circuit breaker
+    P-->>A: deltas (text, thinking, tool input)
+    A-->>Hub: AgentEvents → coalesced per session (≤ every 32 ms)
+    Hub-->>UI: event frames → store flush (≤ 30/s) → only the live turn re-renders
+    A->>T: tool calls: policy → approval round trip (if needed) → hooks → checkpoint → execute
+    T-->>A: results (truncated to limit, secrets redacted)
+    A->>A: watchdog · verification guard before finishing
+  end
+  A->>A: persist · auto-title · memory extraction · skill outcomes
+  A-->>Hub: run_end → next queued message, if any
+```
+
+Everything above the network boundary is persisted as it happens (append-only messages, usage
+rows), so a crash or restart loses at most the turn in flight; agents are rebuilt from history.
+
+## Concurrency model
+
+- **Single-threaded Node event loop** per process; all I/O is asynchronous. CPU-heavy work
+  (commands, code, browsers, MCP servers) runs in child processes.
+- **One run per session at a time.** Follow-ups queue in the Hub (or interrupt, if asked). Any
+  number of sessions run concurrently — chats, platform conversations and cron jobs.
+- **Within a turn**, tool calls marked parallel-safe (reads, searches, fetches) run concurrently;
+  the rest run in order. Subagents run concurrently up to `agent.subagents.maxConcurrent` and
+  nest to `maxDepth`; teams coordinate through their board rather than through the parent.
+- **Cron** runs due jobs up to `cron.maxConcurrent` at a time, each as a headless agent run.
+- **Interactive pauses** (permission requests, clarifying questions) suspend only that agent; they
+  time out after 30 minutes.
+
+## Failure handling
+
+| Failure | What happens |
+|---|---|
+| Provider overloaded / 5xx / network | Retries with backoff (honouring `Retry-After`) → fallback chain → circuit breaker; partial output from a failed attempt is discarded on clients (`restart`) |
+| Request rejected (bad input, auth, missing model) | Not retried; a clear error; the breaker is not tripped |
+| Optional API feature rejected | Retried once without optional betas; kept off only if that fixes it |
+| Model output cut mid tool call | The truncated call is never run; the turn is retried with a larger output limit |
+| Tool error | Returned to the model as a result; the watchdog steps in if it repeats |
+| Agent stuck in a loop | Note after 3 identical failures, stop (`stalled`) after 6 |
+| Run too long / too costly | `agent.budget` stops it cleanly (`budget`) |
+| Context window filling up | Compaction at `agent.compaction.threshold` |
+| User interrupt | Pending tool calls get synthetic "interrupted" results; history stays valid |
+| Bad edit | Checkpoints → `undo` restores files and truncates history |
+| Process restart / crash | Sessions, messages, todos, allow-rules and Codemaster state are on disk; agents rebuild |
+| Bad self-modification | Skill admission gate, edit budget, versioned history, rollback |
+| UI disconnect | The WebSocket reconnects; the UI reloads the session; runs continue server-side |
+
+## Resource bounds
+
+Everything that grows with use has a ceiling, so a Kronos that runs for weeks stays as light as
+one that just started:
+
+| What | Bound |
+|---|---|
+| Live agents in memory | 8 idle (LRU); running ones are never evicted |
+| Context per session | compaction at 80 % of the window (configurable) |
+| Tool output in context | `agent.toolOutputLimit` (40k chars); the rest goes to a file with a pointer |
+| Streaming traffic | ≤ 1 frame per session every 32 ms (gateway), ≤ 30 renders/s (UI) |
+| Markdown render cache | ~2 M characters, LRU |
+| Team board | 400 posts, 2k chars each |
+| Skill history | 20 versions per skill; edit budget per session |
+| Hidden desktop window | renderer released after 10 minutes |
+| Idle UI | no timers or animations running (enforced by an e2e check) |
+
+Measurements and the reasoning behind each bound are in [PERFORMANCE.md](PERFORMANCE.md).
+
+## Extension points
+
+| Extend with | How |
+|---|---|
+| **Skills** | a folder with `SKILL.md` (open format) in `~/.kronos/skills`, `.kronos/skills` or any git repo (`kronos skills install`) |
+| **Subagent types** | markdown files with frontmatter (`name`, `description`, `tools`, `model`) in `~/.kronos/agents` or `.kronos/agents` |
+| **Slash commands** | markdown prompt templates in `~/.kronos/commands` |
+| **Tools** | any MCP server (`kronos mcp add`), or a `ToolDefinition` registered on the runtime |
+| **Hooks** | shell commands on `sessionStart`, `userPromptSubmit`, `preToolUse`, `postToolUse`, `stop` (block, add context, audit) |
+| **Models** | any OpenAI-compatible endpoint as a custom provider; local servers (Ollama, LM Studio, vLLM, llama.cpp) |
+| **Surfaces** | the REST/WS API, the OpenAI-compatible `/v1` API, the MCP server (`kronos mcp serve`), webhooks |
+
 ## Evaluation (`eval/runner.ts`)
 
 `kronos eval suite.yaml` runs every case × repeat × (model, effort) configuration in a **fresh,
@@ -228,7 +363,9 @@ isolated runtime** (its own home: no memory, skills or sessions carry over) and 
 built from the case's fixture files. Checks are typed: answer contains / regex, file exists /
 contains, a shell command that must pass, a tool-call ceiling. The report gives pass rate with its
 **standard deviation across repeats** (the same configuration varies a lot from run to run),
-tokens, cost, time and tool calls per run; `--out` writes every run as JSON.
+tokens, cost, time and tool calls per run; `--out` writes every run as JSON and
+`--trajectories <dir>` writes each run's full message history (one JSONL per run, failed runs
+marked) for inspection.
 `examples/evals/smoke.yaml` is a starting point.
 
 ## Design map
@@ -237,7 +374,7 @@ How the pieces line up along the four dimensions agent surveys use to compare sy
 
 | Dimension | Kronos |
 |---|---|
-| **Autonomy** | agent loop with plans (`todo_write`), compaction, interrupts, checkpoints/undo; effort levels and Codemaster; cron automations that run unattended; verification enforced before finishing |
+| **Autonomy** | agent loop with plans (`todo_write`), compaction, interrupts, checkpoints/undo; effort levels and Codemaster; cron automations that run unattended; verification enforced before finishing; watchdog and per-run budget so autonomy cannot run away |
 | **Tool use** | 35 tools in toggleable toolsets + every MCP server; risk levels per tool; project checks detected and exposed through `verify`; actions-as-code (`execute_code`, `shell`) |
 | **Collaboration** | typed subagents in parallel; teams coordinate through a shared board with claims; 15+ chat platforms; the OpenAI-compatible API and an MCP server for other agents |
 | **Safety & governance** | permission modes, allow/deny rules, dangerous-command detection, protected paths, sandboxed backends, secret redaction; bounded, versioned and reversible self-modification (skill governance); evaluation with repeats before trusting a change |

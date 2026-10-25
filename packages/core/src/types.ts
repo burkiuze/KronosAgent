@@ -107,6 +107,10 @@ export type StopReason =
   | 'context_window'
   | 'interrupted'
   | 'max_iterations'
+  /** the watchdog ended a run that kept repeating a failing action */
+  | 'stalled'
+  /** the run reached agent.budget (tokens, cost or time) */
+  | 'budget'
   | 'error';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -227,7 +231,9 @@ export type StreamEvent =
   | { type: 'thinking'; text: string }
   | { type: 'tool_call_start'; id: string; name: string }
   | { type: 'tool_call_delta'; id: string; partialJson: string }
-  | { type: 'notice'; level: 'info' | 'warn'; text: string };
+  | { type: 'notice'; level: 'info' | 'warn'; text: string }
+  /** the request is being retried or moved to a fallback: discard what this attempt streamed */
+  | { type: 'restart' };
 
 export interface ChatResponse {
   parts: Part[];

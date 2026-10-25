@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +47,8 @@ ${c.bold('Manage')}
   kronos model [list|set <ref>]   models & providers        kronos keys [list|set|unset]
   kronos config [show|get|set|path|edit]                    kronos profile [list|create|use|delete]
   kronos skills [list|show|enable|disable|install|create|history|rollback|prune]
-  kronos sessions [list|show|export|delete|search]          kronos eval <suite.yaml> [--repeats N] [--model a,b] [--effort low,high] [--out report.json]
+  kronos sessions [list|show|export|delete|search]
+  kronos eval <suite.yaml> [--repeats N] [--model a,b] [--effort low,high] [--out report.json] [--trajectories dir]
   kronos cron [list|add|remove|run|pause|resume]            kronos memory [show|add|search|clear]
   kronos mcp [list|add|remove|serve]                        kronos pairing [list|approve <code>]
   kronos import <hermes|openclaw|claude|codex|cursor>       kronos insights [--days N]
@@ -468,6 +469,9 @@ async function cmdEval(rt: Kronos, pos: string[], args: ParsedArgs): Promise<voi
   const total = configs.length * suite.cases.length * repeats;
   console.log(`${c.bold(`Eval: ${suite.name}`)} ${c.gray(`${suite.cases.length} case(s) × ${repeats} repeat(s) × ${configs.length} config(s) = ${total} runs`)}`);
   const base = rt.config;
+  const trajDir = flagStr(args, 'trajectories');
+  if (trajDir) mkdirSync(trajDir, { recursive: true });
+  const slug = (v: string) => v.replace(/[^\w.-]+/g, '_').slice(0, 60);
   const controller = new AbortController();
   const onSigint = () => controller.abort();
   process.once('SIGINT', onSigint);
@@ -491,6 +495,10 @@ async function cmdEval(rt: Kronos, pos: string[], args: ParsedArgs): Promise<voi
             agent: { ...base.agent, autoTitle: false },
           },
         }),
+      onTrajectory: trajDir
+        ? (r, messages) =>
+            writeFileSync(join(trajDir, `${slug(r.config)}__${slug(r.case)}__${r.repeat}${r.passed ? '' : '__FAIL'}.jsonl`), messages.map((m) => JSON.stringify(m)).join('\n') + '\n')
+        : undefined,
       onRun: (r, p) => {
         const mark = r.passed ? c.green(sym.ok) : c.red('✗');
         const why = r.passed ? '' : c.gray(` — ${r.error ?? r.checks.filter((x) => !x.ok).map((x) => x.label).join(', ')}`);
@@ -516,6 +524,7 @@ async function cmdEval(rt: Kronos, pos: string[], args: ParsedArgs): Promise<voi
       writeFileSync(out, JSON.stringify({ suite: suite.name, repeats, configs, summary, runs }, null, 2));
       console.log(c.gray(`report written to ${out}`));
     }
+    if (trajDir) console.log(c.gray(`trajectories written to ${trajDir} (one JSONL per run; failed runs end in __FAIL)`));
     if (args.flags.json) console.log(JSON.stringify({ summary }, null, 2));
   } finally {
     process.off('SIGINT', onSigint);

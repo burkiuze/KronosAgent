@@ -28,6 +28,7 @@ import type { AgentDefinition } from './definitions.js';
 import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
 import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
+import { LoopWatch } from './watchdog.js';
 import { PermissionPolicy, primaryArg } from '../safety/permissions.js';
 import { validateInput } from '../util/schema.js';
 import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError } from '../util/misc.js';
@@ -115,6 +116,12 @@ export class Agent {
   private pendingPermissions = new Map<string, (d: PermissionDecision) => void>();
   private pendingClarify = new Map<string, (a: string) => void>();
   private readFiles = new Set<string>();
+  /**
+   * Full file reads whose content is still in the context, keyed by path + range. Bumping
+   * `contextEpoch` (compaction, undo) invalidates them all, since earlier tool output is gone.
+   */
+  private readCache = new Map<string, { mtimeMs: number; size: number; epoch: number; lines: number }>();
+  private contextEpoch = 0;
   /** files changed by write tools since the last verify call in this run */
   private editsSinceVerify = 0;
   private verifyNudged = false;
@@ -316,6 +323,12 @@ export class Agent {
     this.readFiles.add(path);
   }
 
+  /** A read of this exact file and range whose (unchanged) content is still in the context. */
+  cachedRead(key: string, mtimeMs: number, size: number): { lines: number } | undefined {
+    const hit = this.readCache.get(key);
+    return hit && hit.epoch === this.contextEpoch && hit.mtimeMs === mtimeMs && hit.size === size ? { lines: hit.lines } : undefined;
+  }
+
   noteSkillUse(name: string): void {
     this.skillUses.set(name, (this.skillUses.get(name) ?? 0) + 1);
     this.runSkills.add(name);
@@ -507,9 +520,18 @@ export class Agent {
       const turn = turns;
       let maxTokens = Math.min(cfg.model.maxOutputTokens, model.maxOutput || cfg.model.maxOutputTokens);
       const maxIter = opts.maxIterations ?? cfg.agent.maxIterations;
+      const watch = new LoopWatch();
+      let lastText = '';
 
       for (let iter = 1; iter <= maxIter; iter += 1) {
         if (signal.aborted) throw abortError();
+        const over = iter > 1 ? overBudget(cfg.agent.budget, runUsage, started) : '';
+        if (over) {
+          stop = 'budget';
+          finalText = lastText;
+          this.notice('warn', `Stopped: this run reached its budget (${over}). Say "continue" to keep going.`);
+          break;
+        }
         await this.maybeCompact(model, runId, signal);
         this.emit({ type: 'turn_start', runId, iteration: iter });
         partialText = '';
@@ -543,6 +565,11 @@ export class Agent {
               break;
             case 'notice':
               this.notice(e.level, e.text);
+              break;
+            case 'restart':
+              // a retry or fallback starts over: clients drop what the failed attempt streamed
+              partialText = '';
+              this.emit({ type: 'turn_start', runId, iteration: iter });
               break;
           }
         });
@@ -588,6 +615,7 @@ export class Agent {
           this.emit({ type: 'message', runId, message: assistant });
         }
         partialText = '';
+        lastText = textOf(res.parts) || lastText;
 
         if (res.stopReason === 'refusal') {
           stop = 'refusal';
@@ -628,6 +656,16 @@ export class Agent {
         this.append([toolMsg]);
         this.emit({ type: 'message', runId, message: toolMsg });
         if (signal.aborted) throw abortError();
+        const verdict = watch.observe(toolCalls.map((c, i) => ({ name: c.name, input: c.input, isError: Boolean(results[i]?.isError), content: results[i]?.content ?? '' })));
+        if (verdict.kind === 'stop') {
+          stop = 'stalled';
+          finalText = lastText;
+          this.notice('warn', verdict.reason);
+          break;
+        }
+        if (verdict.kind === 'warn') {
+          this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: verdict.note }], createdAt: Date.now(), meta: { kind: 'note' } }]);
+        }
         if (iter === maxIter) {
           stop = 'max_iterations';
           finalText = textOf(res.parts);
@@ -827,7 +865,10 @@ export class Agent {
     } catch (e) {
       out = { content: isAbortError(e) ? 'Interrupted by the user.' : `Error: ${errorMessage(e)}`, isError: true };
     }
-    if (!out.isError && def.toolset === 'files' && resolveRisk(def, input) === 'write') this.editsSinceVerify += 1;
+    if (!out.isError && def.toolset === 'files' && resolveRisk(def, input) === 'write') {
+      this.editsSinceVerify += 1;
+      this.readCache.clear();
+    }
     let content = out.content ?? '';
     if (this.rt.config.safety.redactSecrets) content = redactSecrets(content);
     const limit = this.rt.config.agent.toolOutputLimit;
@@ -843,6 +884,11 @@ export class Agent {
       const t = truncateMiddle(content, limit);
       content = `${t.text}\n\n[full output (${out.content.length.toLocaleString()} chars) saved to ${file} — read_file/grep it for details]`;
       meta = { ...meta, truncated: true, fullOutputPath: file };
+    }
+    // remember complete reads (output that was cut is not fully in context, so it does not count)
+    const read = meta?.read as { key: string; mtimeMs: number; size: number; lines: number } | undefined;
+    if (call.name === 'read_file' && read && !out.isError && !meta?.truncated) {
+      this.readCache.set(read.key, { mtimeMs: read.mtimeMs, size: read.size, lines: read.lines, epoch: this.contextEpoch });
     }
     if (this.rt.hooks.has('postToolUse')) {
       const h = await this.rt.hooks.run('postToolUse', { sessionId: this.session.id, toolName: call.name, input, output: truncate(content, 20_000), isError: Boolean(out.isError) }, { toolName: call.name, cwd: this.session.cwd });
@@ -949,6 +995,7 @@ export class Agent {
       meta: { kind: 'summary' },
     };
     this.messages = [summaryMsg];
+    this.contextEpoch += 1;
     this.rt.sessions.replaceMessages(this.session.id, this.messages);
     this.lastContextTokens = 0;
     const after = this.contextUsage().tokens;
@@ -993,6 +1040,7 @@ export class Agent {
     const text = messageText(this.messages[idx] as Message);
     const removed = this.messages.length - idx;
     this.messages = this.messages.slice(0, idx);
+    this.contextEpoch += 1;
     this.rt.sessions.truncate(this.session.id, idx);
     const restoredFiles = this.rt.config.safety.checkpoints ? this.rt.checkpoints.restore(this.session.id, turn) : [];
     return { removed, restoredFiles, text };
@@ -1068,7 +1116,7 @@ export class Agent {
       });
       try {
         const r = await child.run({ text: t.task }, { signal: opts.signal, maxIterations: cfg.maxIterations });
-        const ok = r.stopReason !== 'error' && r.stopReason !== 'interrupted';
+        const ok = r.stopReason !== 'error' && r.stopReason !== 'interrupted' && r.stopReason !== 'stalled';
         this.emit({ type: 'subagent', runId: this.currentRunId, agentId, label, status: ok ? 'done' : 'error', detail: r.error });
         return { label, ok, text: r.text, error: r.error, sessionId: session.id, durationMs: Date.now() - started, usage: r.usage };
       } catch (e) {
@@ -1192,6 +1240,16 @@ export class Agent {
 export { primaryArg };
 
 /** Instructions injected when Codemaster is switched on (max effort + a rigorous workflow). */
+/** Which per-run limit was reached, as a short description; '' while within budget. */
+export function overBudget(budget: { maxTokens: number; maxCostUsd: number; maxMinutes: number } | undefined, usage: Usage, startedAt: number, now = Date.now()): string {
+  if (!budget) return '';
+  const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  if (budget.maxTokens > 0 && tokens >= budget.maxTokens) return `${tokens.toLocaleString()} of ${budget.maxTokens.toLocaleString()} tokens`;
+  if (budget.maxCostUsd > 0 && (usage.costUsd ?? 0) >= budget.maxCostUsd) return `$${(usage.costUsd ?? 0).toFixed(2)} of $${budget.maxCostUsd.toFixed(2)}`;
+  if (budget.maxMinutes > 0 && now - startedAt >= budget.maxMinutes * 60_000) return `${budget.maxMinutes} min`;
+  return '';
+}
+
 export function codemasterDirective(toolNames: string[]): string {
   const has = (n: string) => toolNames.includes(n);
   const steps = [

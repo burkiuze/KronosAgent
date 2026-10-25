@@ -69,6 +69,7 @@ Then use `vllm:qwen3-coder-480b` anywhere a model is accepted.
 | `agent.subagents` | `{maxConcurrent: 4, maxDepth: 2, maxIterations: 60}` | Delegation limits. |
 | `agent.nudges` | `{memoryEvery: 12, skillAfterToolCalls: 18}` | When to remind the agent to save memories / capture a skill. |
 | `agent.verifyBeforeFinish` | `true` | If a run changed files and never ran `verify` afterwards (and the project has checks), ask for one verification turn before finishing. |
+| `agent.budget` | `{maxTokens: 0, maxCostUsd: 0, maxMinutes: 0}` | Per-run limits (0 = none). A run that reaches one stops cleanly (`stopReason: budget`) and can be continued. |
 
 ## Toolsets
 

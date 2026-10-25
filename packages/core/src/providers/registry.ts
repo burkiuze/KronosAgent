@@ -48,9 +48,26 @@ function describeConnectionError(e: unknown): string {
 /** Auto-selection order when model.default is "auto". */
 const AUTO_ORDER = ['anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras'];
 
+/** consecutive failed requests (after retries) before a provider is skipped for a while */
+const BREAKER_THRESHOLD = 3;
+const BREAKER_COOLDOWN_MS = 60_000;
+
 export class ProviderRegistry {
   private cache = new Map<string, Provider>();
   private liveModels = new Map<string, ModelInfo[]>();
+  /**
+   * Circuit breaker per provider: after repeated failures a provider is skipped for a cooldown
+   * when the fallback chain has an alternative, instead of every request waiting through the
+   * same retries and backoff again.
+   */
+  private health = new Map<string, { failures: number; openUntil: number }>();
+
+  /** Providers currently being skipped, with seconds left. */
+  breakerStatus(now = Date.now()): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [id, h] of this.health) if (h.openUntil > now) out[id] = Math.ceil((h.openUntil - now) / 1000);
+    return out;
+  }
 
   constructor(private config: KronosConfig) {}
 
@@ -258,27 +275,58 @@ export class ProviderRegistry {
    * fallback chain. Emits notices so every UI can show what happened.
    */
   async chat(req: ChatRequest, onEvent: (e: StreamEvent) => void, fallbacks: string[] = this.config.model.fallbacks): Promise<ChatResponse & { modelInfo: ModelInfo }> {
-    const chain: ModelInfo[] = [req.model, ...fallbacks.map((f) => this.resolve(f)).filter((m) => m.ref !== req.model.ref)];
+    const all: ModelInfo[] = [req.model, ...fallbacks.map((f) => this.resolve(f)).filter((m) => m.ref !== req.model.ref)];
+    const now = Date.now();
+    const healthy = all.filter((m) => (this.health.get(m.provider)?.openUntil ?? 0) <= now);
+    // with everything tripped, still try the chain rather than fail without a request
+    const chain = healthy.length ? healthy : all;
+    for (const m of all) if (!chain.includes(m)) onEvent({ type: 'notice', level: 'warn', text: `Skipping ${m.name}: ${m.provider} failed repeatedly; retrying it in ${this.breakerStatus()[m.provider] ?? 0}s.` });
     let lastErr: unknown;
+    let streamed = false;
+    const track = (e: StreamEvent) => {
+      if (e.type !== 'notice') streamed = true;
+      onEvent(e);
+    };
+    // anything an earlier attempt streamed is discarded before the next one starts
+    const restart = () => {
+      if (streamed) onEvent({ type: 'restart' });
+      streamed = false;
+    };
     for (const [i, model] of chain.entries()) {
-      if (i > 0) onEvent({ type: 'notice', level: 'warn', text: `Falling back to ${model.name} (${model.ref}).` });
+      if (i > 0) {
+        restart();
+        onEvent({ type: 'notice', level: 'warn', text: `Falling back to ${model.name} (${model.ref}).` });
+      }
       const provider = this.get(model.provider);
       // the Anthropic SDK retries internally; add a light outer retry for every provider
       const maxAttempts = provider instanceof AnthropicProvider ? 2 : 4;
+      let failed = false;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
-          const res = await provider.chat({ ...req, model }, onEvent);
+          if (attempt > 1) restart();
+          const res = await provider.chat({ ...req, model }, track);
+          this.health.delete(model.provider);
           return { ...res, modelInfo: model };
         } catch (e) {
           lastErr = e;
           if (isAbortError(e) || req.signal?.aborted) throw e;
           if (e instanceof MissingCredentialsError) break;
           const retryable = e instanceof ProviderError ? e.retryable : true;
-          if (!retryable || attempt === maxAttempts) break;
+          if (!retryable || attempt === maxAttempts) {
+            failed = retryable;
+            break;
+          }
           const wait = (e instanceof ProviderError && e.retryAfterMs) || Math.min(30_000, 1000 * 2 ** (attempt - 1) + Math.random() * 400);
           onEvent({ type: 'notice', level: 'warn', text: `${model.name}: ${(e as Error).message.slice(0, 160)} — retrying in ${Math.round(wait / 1000)}s` });
           await sleep(wait, req.signal);
         }
+      }
+      if (failed) {
+        // only outages trip the breaker; a rejected request (bad input, auth) says nothing about the provider's health
+        const h = this.health.get(model.provider) ?? { failures: 0, openUntil: 0 };
+        h.failures += 1;
+        if (h.failures >= BREAKER_THRESHOLD) h.openUntil = Date.now() + BREAKER_COOLDOWN_MS;
+        this.health.set(model.provider, h);
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));

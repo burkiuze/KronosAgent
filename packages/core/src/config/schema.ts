@@ -86,6 +86,8 @@ export interface KronosConfig {
     nudges: { memoryEvery: number; skillAfterToolCalls: number };
     /** when a run edited files but never ran verify afterwards, ask for verification once before finishing */
     verifyBeforeFinish: boolean;
+    /** per-run limits (0 = unlimited); a run that reaches one stops cleanly and can be continued */
+    budget: { maxTokens: number; maxCostUsd: number; maxMinutes: number };
   };
   toolsets: { enabled: string[]; disabled: string[] };
   terminal: {
@@ -232,6 +234,7 @@ export function defaultConfig(): KronosConfig {
       subagents: { maxConcurrent: 4, maxDepth: 2, maxIterations: 60 },
       nudges: { memoryEvery: 12, skillAfterToolCalls: 18 },
       verifyBeforeFinish: true,
+      budget: { maxTokens: 0, maxCostUsd: 0, maxMinutes: 0 },
     },
     toolsets: { enabled: [...ALL_TOOLSETS], disabled: [] },
     terminal: {

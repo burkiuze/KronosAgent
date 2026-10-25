@@ -182,6 +182,11 @@ reporting only to the parent. Each member's own task is pre-claimed; members **r
 work) and mark items **done**. Posts appear live on the subagent cards in the UI, and the parent
 receives the board with the subagents' reports.
 
+The operational notes became harness features too: a **watchdog** (`agent/watchdog.ts`) notices
+a run that stopped making progress — the same call failing again and again, or the same read
+repeated — tells the model plainly and ends the run if it continues (`stalled`), and a per-run
+**budget** (`agent.budget`: tokens, cost, minutes) ends runaway runs cleanly.
+
 ## 8. A Team of Gemini 4 Argon Agents Beats Minecraft
 
 Faldor, Singh, Raileanu (Google DeepMind) — arXiv:2610.22319 (Oct 2026). Read: abstract and
@@ -233,4 +238,5 @@ adopting it.
 | Propose–Probe–Compose | 5 | Codemaster workflow | `agent/agent.ts` |
 | Self-improvement overfits without regularisation | 6, 9 | Skill admission gate, edit budget, history + rollback, no redraw of rolled-back changes, pruning | `skills/registry.ts`, `tools/agentic.ts`, `runtime.ts` |
 | Decentralised teams scale through shared state and claims | 7, 8 | Team board for delegated subagents | `agent/board.ts`, `tools/agentic.ts` |
+| Long autonomous runs need watchdogs and limits | 7 | Loop watchdog (`stalled`), per-run budget (`budget`), eval trajectories for inspection | `agent/watchdog.ts`, `agent/agent.ts`, `eval/runner.ts` |
 | Autonomy vs. control | 3, 4 | Governance kept bounded, reversible and auditable; architecture mapped to autonomy · tool use · collaboration · safety-governance | `docs/ARCHITECTURE.md` |

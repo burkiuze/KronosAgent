@@ -71,6 +71,16 @@ export const readFileTool: ToolDefinition<{ path: string; offset?: number; limit
     if (st.isDirectory()) return fail(`${input.path} is a directory. Use list_dir instead.`);
     if (st.size > MAX_READ_BYTES) return fail(`${input.path} is ${(st.size / 1e6).toFixed(1)} MB — too large. Use grep or the shell (head/tail) to inspect parts of it.`);
     const ext = extname(path).toLowerCase();
+    const readKey = `${path}#${input.offset ?? 1}:${input.limit ?? 2000}`;
+    if (!IMAGE_TYPES[ext]) {
+      // the same range of an unchanged file is already in the conversation: say so instead of
+      // paying for the whole file again
+      const seen = ctx.agent.cachedRead(readKey, st.mtimeMs, st.size);
+      if (seen) {
+        ctx.agent.noteRead(path);
+        return ok(`${input.path} has not changed since you read it earlier in this conversation (${seen.lines} lines) — its content is above. Use that; read again only after the file changes or with a different offset/limit.`, { path, unchanged: true });
+      }
+    }
     const buf = readFileSync(path);
     if (IMAGE_TYPES[ext]) {
       return { content: `Image ${input.path} (${(st.size / 1024).toFixed(0)} KB)`, images: [{ type: 'image', mediaType: IMAGE_TYPES[ext] as string, data: buf.toString('base64'), name: basename(path) }], meta: { path } };
@@ -96,7 +106,7 @@ export const readFileTool: ToolDefinition<{ path: string; offset?: number; limit
     if (encoding !== 'utf-8') out += `\n[transcoded from ${encoding}]`;
     if (!text) out = '(empty file)';
     ctx.agent.noteRead(path);
-    return ok(out, { path, lines: lines.length });
+    return ok(out, { path, lines: lines.length, read: { key: readKey, mtimeMs: st.mtimeMs, size: st.size, lines: lines.length } });
   },
 };
 
