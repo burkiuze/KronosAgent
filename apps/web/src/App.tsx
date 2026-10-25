@@ -1,12 +1,11 @@
 import { useEffect } from 'react';
-import { PanelRight, Settings, UserRound, Volume2, VolumeX } from 'lucide-react';
+import { PanelLeft, PanelRight, Settings, Volume2, VolumeX } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { ChatView } from './components/ChatView';
 import { RightPanel } from './components/RightPanel';
 import { SettingsModal } from './components/Settings';
 import { CommandPalette } from './components/CommandPalette';
-import { ProfilesMenu } from './components/Profiles';
 import { Toasts } from './components/Toasts';
 import { SkillsPage } from './pages/Skills';
 import { ArtifactsPage } from './pages/Artifacts';
@@ -139,6 +138,18 @@ export function App() {
       <div className="wallpaper" />
       <Sidebar />
       <main className="main">
+        {!sidebarOpen && (
+          <button
+            className="icon-btn sidebar-reopen"
+            title="Show sidebar (⌘B)"
+            onClick={() => {
+              savePref('sidebarOpen', true);
+              setState({ sidebarOpen: true });
+            }}
+          >
+            <PanelLeft size={16} />
+          </button>
+        )}
         <div className="global-actions">
           <button
             className={`icon-btn ${autoSpeak ? 'active' : ''}`}
@@ -152,10 +163,11 @@ export function App() {
           >
             {autoSpeak ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </button>
-          <ProfilesMenu trigger={(open) => <button className="icon-btn" title="Profiles" onClick={open}><UserRound size={16} /></button>} />
-          <button className="icon-btn" title="Settings (⌘,)" onClick={() => setState({ settings: 'model' })}>
-            <Settings size={16} />
-          </button>
+          {!sidebarOpen && (
+            <button className="icon-btn" title="Settings (⌘,)" onClick={() => setState({ settings: 'model' })}>
+              <Settings size={16} />
+            </button>
+          )}
           <button
             className={`icon-btn ${rightPanel ? 'active' : ''}`}
             title="Files & terminal (⌘J)"

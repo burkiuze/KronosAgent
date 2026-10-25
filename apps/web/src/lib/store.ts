@@ -33,6 +33,8 @@ export interface ChatState {
   queue: { id: string; text: string }[];
   running: boolean;
   runStartedAt?: number;
+  /** duration of the last finished run */
+  lastRunMs?: number;
   context?: { tokens: number; window: number; percent: number };
   usage?: Usage;
   subagents: Record<string, SubagentLive>;
@@ -99,7 +101,7 @@ let state: AppState = {
   paletteOpen: false,
   profilesOpen: false,
   toasts: [],
-  groupByProject: loadPref('groupByProject', false),
+  groupByProject: loadPref('groupByProject', true),
   autoSpeak: loadPref('autoSpeak', false),
   configVersion: 0,
 };
@@ -421,7 +423,7 @@ function handleAgentEvent(sessionId: string, e: AgentEvent): void {
       setState((s) => ({ sessions: s.sessions.map((x) => (x.id === e.sessionId ? { ...x, title: e.title } : x)) }));
       break;
     case 'run_end':
-      updateChat(sessionId, () => ({ running: false, runStartedAt: undefined }));
+      updateChat(sessionId, (c) => ({ running: false, runStartedAt: undefined, lastRunMs: e.durationMs ?? (c.runStartedAt ? Date.now() - c.runStartedAt : c.lastRunMs) }));
       setState((s) => ({ running: s.running.filter((r) => r.sessionId !== sessionId) }));
       if (state.chats[sessionId]?.loaded) void loadSession(sessionId);
       refreshSessions(300);

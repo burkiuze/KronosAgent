@@ -151,9 +151,9 @@ function TerminalPanel({ cwd }: { cwd: string }) {
       cursorBlink: true,
       allowProposedApi: true,
       theme: {
-        background: document.documentElement.dataset.mode === 'dark' ? styles.getPropertyValue('--code').trim() || '#111' : '#0f2a2e',
-        foreground: '#e6edf3',
-        cursor: styles.getPropertyValue('--accent').trim() || '#d9a441',
+        background: document.documentElement.dataset.mode === 'dark' ? styles.getPropertyValue('--code').trim() || '#1a1a1a' : '#1e1e1e',
+        foreground: '#e6e6e6',
+        cursor: styles.getPropertyValue('--accent').trim() || '#3b82f6',
       },
     });
     const fit = new FitAddon();

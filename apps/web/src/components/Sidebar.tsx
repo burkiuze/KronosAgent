@@ -9,6 +9,8 @@ import {
   Download,
   Ellipsis,
   FileText,
+  Folder,
+  FolderOpen,
   GitFork,
   List,
   MessageSquare,
@@ -18,6 +20,7 @@ import {
   PinOff,
   Puzzle,
   Search,
+  Settings,
   SquarePen,
   Trash2,
   X,
@@ -28,6 +31,8 @@ import { relTime } from '../lib/format';
 import { t } from '../lib/i18n';
 import type { Session } from '../lib/types';
 import { Menu, MenuItem } from './ui';
+import { KronosMark } from './Logo';
+import { ProfilesMenu } from './Profiles';
 
 const NAV: { id: View; icon: typeof Puzzle; key: string }[] = [
   { id: 'skills', icon: Puzzle, key: 'nav.skills' },
@@ -176,20 +181,38 @@ export function Sidebar() {
   const pinned = filtered.filter((s) => s.pinned);
   const rest = filtered.filter((s) => !s.pinned);
   const groups = useMemo(() => {
-    if (!groupByProject) return [{ name: '', items: rest }];
-    const map = new Map<string, Session[]>();
+    if (!groupByProject) return [{ name: '', kind: 'all' as const, items: rest }];
+    const map = new Map<string, { kind: 'project' | 'platform'; items: Session[] }>();
     for (const s of rest) {
-      const key = s.source.startsWith('desktop') || s.source === 'cli' || s.source === 'api' ? s.project : s.source.split(':')[0] ?? s.project;
-      map.set(key, [...(map.get(key) ?? []), s]);
+      const local = s.source.startsWith('desktop') || s.source === 'cli' || s.source === 'api' || s.source.startsWith('cron');
+      const key = local ? s.project || 'workspace' : (s.source.split(':')[0] ?? s.project);
+      const g = map.get(key) ?? { kind: local ? ('project' as const) : ('platform' as const), items: [] };
+      g.items.push(s);
+      map.set(key, g);
     }
-    return [...map.entries()].map(([name, items]) => ({ name, items }));
+    return [...map.entries()].map(([name, g]) => ({ name, ...g }));
   }, [rest, groupByProject]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const status = useStore((s) => s.status);
+  const profile = status?.profile ?? 'default';
+  const displayName = profile === 'default' ? (status?.agentName ?? 'Kronos') : profile;
 
   const item = (s: Session) => <SessionItem key={s.id} s={s} active={view === 'chat' && currentId === s.id} running={runningIds.has(s.id)} needsInput={attention.has(s.id)} />;
 
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
+        <div className="brand">
+          <KronosMark size={22} />
+          <span>KRONOS</span>
+        </div>
+        <div className="flex-1" />
+        <button className={`icon-btn ${searching ? 'active' : ''}`} title="Search chats" onClick={() => setSearching((v) => !v)}>
+          <Search size={16} />
+        </button>
+        <button className="icon-btn" title="Command palette (⌘K)" onClick={() => setState({ paletteOpen: true })}>
+          <BookOpen size={15} />
+        </button>
         <button
           className="icon-btn"
           title="Toggle sidebar (⌘B)"
@@ -199,13 +222,6 @@ export function Sidebar() {
           }}
         >
           <PanelLeft size={16} />
-        </button>
-        <button className={`icon-btn ${searching ? 'active' : ''}`} title="Search chats" onClick={() => setSearching((v) => !v)}>
-          <Search size={16} />
-        </button>
-        <div className="flex-1" />
-        <button className="icon-btn" title="Command palette (⌘K)" onClick={() => setState({ paletteOpen: true })}>
-          <BookOpen size={15} />
         </button>
       </div>
       {searching && (
@@ -232,14 +248,14 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="sidebar-scroll">
+        {pinned.length > 0 && (
+          <>
+            <div className="section-head">{t('nav.pinned')}</div>
+            {pinned.map(item)}
+          </>
+        )}
         <div className="section-head">
-          <span className="section-square" />
-          {t('nav.pinned')}
-        </div>
-        {pinned.length ? pinned.map(item) : <div className="sidebar-hint">↖ {t('nav.pinHint')}</div>}
-        <div className="section-head">
-          <span className="section-square" />
-          {t('nav.agents')} <span className="count">{rest.length}</span>
+          {t('sidebar.chats')} <span className="count">{rest.length}</span>
           <div className="flex-1" />
           <button
             className={`icon-btn tiny ${groupByProject ? 'active' : ''}`}
@@ -253,13 +269,15 @@ export function Sidebar() {
           </button>
         </div>
         {groups.map((g) => (
-          <div key={g.name || 'all'}>
+          <div key={g.name || 'all'} className={g.name ? 'folder' : ''}>
             {g.name && (
-              <div className="group-head">
-                {g.name} <span className="count">{g.items.length}</span>
-              </div>
+              <button className="folder-head" onClick={() => setCollapsed((c) => ({ ...c, [g.name]: !c[g.name] }))} title={g.name}>
+                {g.kind === 'platform' ? <MessageSquare size={15} /> : collapsed[g.name] ? <Folder size={15} /> : <FolderOpen size={15} />}
+                <span className="folder-name">{g.name}</span>
+                <span className="count">{g.items.length}</span>
+              </button>
             )}
-            {g.items.map(item)}
+            {!collapsed[g.name] && g.items.map(item)}
           </div>
         ))}
         {!sessions.length && <div className="sidebar-hint">No conversations yet</div>}
@@ -278,6 +296,20 @@ export function Sidebar() {
             <Archive size={12} /> {t('nav.archived')}
           </button>
         )}
+      </div>
+      <div className="sidebar-foot">
+        <ProfilesMenu
+          up
+          trigger={(open) => (
+            <button className="me" onClick={open} title={t('profiles.title')}>
+              <span className="avatar">{displayName.slice(0, 1).toUpperCase()}</span>
+              <span className="me-name">{displayName}</span>
+            </button>
+          )}
+        />
+        <button className="icon-btn" title={`${t('sidebar.settings')} (⌘,)`} onClick={() => setState({ settings: 'model' })}>
+          <Settings size={17} />
+        </button>
       </div>
     </aside>
   );

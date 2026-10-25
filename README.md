@@ -93,7 +93,9 @@ any OpenAI-compatible endpoint as a custom provider. Hermes-style models that em
   mentions, `!shell`, multi-line input, queued follow-ups, Ctrl-C to interrupt.
 - **Desktop app** (Electron) and **web UI**: sessions with pins/projects/archive, live tool cards,
   permission and question cards, files panel with editor, real PTY terminal, command palette,
-  8 themes × light/dark, English/Turkish UI, voice input/output, insights dashboard.
+  9 themes × light/dark (default: neutral Graphite), English/Turkish UI, voice input/output,
+  insights dashboard. Every turn ends with a "N files changed · Undo" summary and long tasks
+  get a live Progress checklist beside the chat.
 - **Messaging**: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, webhooks, Home Assistant —
   with pairing codes for new users, in-chat approvals (`/approve`, `/deny`), `/model`, `/mode`,
   `/undo`, `/retry`, voice-memo transcription and per-platform profiles.

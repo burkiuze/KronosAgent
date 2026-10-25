@@ -78,9 +78,21 @@ try {
   await check('session appears in the sidebar', async () => {
     await page.locator('.session-item').first().waitFor({ timeout: 10000 });
   });
-  await check('plans with a todo list', async () => {
+  await check('plans with a todo list and a progress rail', async () => {
     await send('make a plan to refactor app.ts');
-    await page.locator('.todo-list, .todos, .todo-float').first().waitFor({ timeout: 15000 });
+    await page.locator('.tool-card .todo-list').first().waitFor({ timeout: 15000 });
+    await page.locator('.progress-rail .todo-list').waitFor({ timeout: 15000 });
+  });
+  await check('summarises file changes with undo', async () => {
+    await send('create file notes.md');
+    await page.locator('.files-changed', { hasText: 'notes.md' }).waitFor({ timeout: 15000 });
+    await page.locator('.fc-undo').click();
+    await page.locator('.files-changed').waitFor({ state: 'detached', timeout: 15000 });
+  });
+  await check('switches permission mode from the composer', async () => {
+    await page.locator('.composer-bar .cbtn[class*="mode-"]').click();
+    await page.locator('.mode-option', { hasText: 'Plan mode' }).click();
+    await page.locator('.composer-bar .cbtn.mode-plan').waitFor({ timeout: 5000 });
   });
   for (const [label, sel] of [
     ['Skills', '.page'],

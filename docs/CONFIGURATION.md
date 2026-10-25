@@ -161,7 +161,7 @@ hooks:
 | `cron.enabled` | `true` | Run automations while a gateway/desktop app is running. |
 | `cron.timezone` | `""` | IANA zone for schedules (empty = system). |
 | `cron.maxConcurrent` | `2` | Parallel automation runs. |
-| `ui.theme` / `ui.mode` | `kronos` / `system` | Themes: `kronos`, `midnight`, `ember`, `mono`, `cyberpunk`, `slate`, `aurora`, `sakura`; modes `light`, `dark`, `system`. |
+| `ui.theme` / `ui.mode` | `kronos` / `system` | Themes: `kronos` (Graphite, default), `titan`, `midnight`, `ember`, `mono`, `cyberpunk`, `slate`, `aurora`, `sakura`; modes `light`, `dark`, `system`. |
 | `ui.toolDisplay` | `product` | `product` (friendly summaries) or `technical` (raw inputs/outputs). |
 | `ui.fontSize` / `ui.density` / `ui.sendOnEnter` / `ui.showTokenUsage` / `ui.wallpaper` | | Appearance preferences. |
 | `updates.channel` / `updates.autoCheck` | `stable` / `true` | Desktop auto-update channel. |

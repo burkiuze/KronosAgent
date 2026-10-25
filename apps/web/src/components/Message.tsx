@@ -2,6 +2,9 @@ import { memo, useState, type ReactElement } from 'react';
 import {
   Brain,
   Check,
+  CircleCheck,
+  Circle,
+  Undo2,
   ChevronDown,
   ChevronRight,
   CircleX,
@@ -30,6 +33,7 @@ import { renderMarkdown } from '../lib/markdown';
 import { toolSummary } from '../lib/format';
 import { t } from '../lib/i18n';
 import { useConfig } from '../lib/config';
+import { undoLast } from '../lib/store';
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
@@ -91,11 +95,97 @@ export function TodoList({ todos }: { todos: Todo[] }) {
     <ul className="todo-list">
       {todos.map((td) => (
         <li key={td.id} className={td.status}>
-          <span className="todo-box">{td.status === 'completed' ? <Check size={11} /> : td.status === 'in_progress' ? <LoaderCircle size={11} className="spin" /> : null}</span>
-          <span>{td.status === 'in_progress' ? (td.activeForm ?? td.content) : td.content}</span>
+          <span className="todo-box">
+            {td.status === 'completed' ? <CircleCheck size={18} /> : td.status === 'in_progress' ? <LoaderCircle size={18} className="spin" /> : <Circle size={18} />}
+          </span>
+          <span className="todo-text">{td.status === 'in_progress' ? (td.activeForm ?? td.content) : td.content}</span>
         </li>
       ))}
     </ul>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "N files changed" summary for a turn
+
+interface FileChange {
+  path: string;
+  added: number;
+  removed: number;
+  diff: string;
+}
+
+/** Split the unified diffs produced by the file tools into per-file stats. */
+export function collectChanges(diffs: string[]): FileChange[] {
+  const map = new Map<string, FileChange>();
+  for (const diff of diffs) {
+    let cur: FileChange | undefined;
+    for (const line of diff.split('\n')) {
+      if (line.startsWith('+++ ')) {
+        const path = line.slice(4).replace(/^b\//, '').trim();
+        cur = map.get(path) ?? { path, added: 0, removed: 0, diff: '' };
+        map.set(path, cur);
+        continue;
+      }
+      if (line.startsWith('--- ')) continue;
+      if (!cur) continue;
+      cur.diff += `${line}\n`;
+      if (line.startsWith('+')) cur.added += 1;
+      else if (line.startsWith('-')) cur.removed += 1;
+    }
+  }
+  return [...map.values()].filter((c) => c.path && c.path !== '/dev/null');
+}
+
+const EXT_COLORS: Record<string, string> = {
+  js: '#e8c547', mjs: '#e8c547', cjs: '#e8c547', jsx: '#5ccfe6', ts: '#3b82f6', tsx: '#5ccfe6', html: '#e8613c', css: '#8b5cf6', scss: '#d6619b',
+  json: '#d4a72c', md: '#9ca3af', py: '#4b8bbe', go: '#22b8cf', rs: '#d97a4a', rb: '#e0474c', java: '#e76f00', sh: '#7ac46e', yml: '#c678dd', yaml: '#c678dd',
+  sql: '#e5a00d', vue: '#41b883', svelte: '#ff3e00', php: '#7a86b8', swift: '#f05138', kt: '#a97bff', c: '#5c8dbc', cpp: '#5c8dbc', h: '#5c8dbc',
+};
+
+function FileBadge({ path }: { path: string }) {
+  const ext = (path.split('.').pop() ?? '').toLowerCase();
+  const color = EXT_COLORS[ext] ?? 'var(--faint)';
+  return (
+    <span className="file-badge" style={{ background: `color-mix(in srgb, ${color} 18%, transparent)`, color }}>
+      {ext.slice(0, 2).toUpperCase() || '·'}
+    </span>
+  );
+}
+
+export function FilesChanged({ changes, sessionId, canUndo }: { changes: FileChange[]; sessionId?: string; canUndo?: boolean }) {
+  const [open, setOpen] = useState<string | null>(null);
+  if (!changes.length) return null;
+  const added = changes.reduce((a, c) => a + c.added, 0);
+  const removed = changes.reduce((a, c) => a + c.removed, 0);
+  return (
+    <div className="files-changed">
+      <div className="fc-head">
+        <span className="fc-title">{changes.length === 1 ? t('changes.file') : t('changes.files', { n: changes.length })}</span>
+        <span className="add">+{added}</span>
+        <span className="del">-{removed}</span>
+        <div className="flex-1" />
+        {canUndo && sessionId && (
+          <button className="fc-undo" onClick={() => void undoLast(sessionId)}>
+            {t('changes.undo')} <Undo2 size={14} />
+          </button>
+        )}
+      </div>
+      {changes.map((c) => (
+        <div key={c.path} className="fc-file">
+          <button className="fc-row" onClick={() => setOpen((o) => (o === c.path ? null : c.path))} title={c.path}>
+            <FileBadge path={c.path} />
+            <span className="fc-name">
+              {c.path.split('/').pop()}
+              {c.path.includes('/') && <span className="fc-dir">{c.path.slice(0, c.path.lastIndexOf('/'))}</span>}
+            </span>
+            <span className="add">+{c.added}</span>
+            <span className="del">-{c.removed}</span>
+          </button>
+          {open === c.path && <Diff diff={c.diff} />}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -154,7 +244,6 @@ export function ToolCard({ name, input, live, result, pending }: ToolCardProps) 
       </button>
       {running && live?.progress && <pre className="tool-progress">{live.progress.split('\n').slice(-6).join('\n')}</pre>}
       {todos && todos.length > 0 && !showBody && <TodoList todos={todos} />}
-      {diff && !showBody && <Diff diff={diff.split('\n').slice(0, 30).join('\n')} />}
       {res?.images && res.images.length > 0 && <Images images={res.images} />}
       {showBody && (
         <div className="tool-body">
@@ -224,8 +313,23 @@ export function UserMessage({ message, pending }: { message: Message; pending?: 
 }
 
 /** Assistant turn: interleaved thinking, text and tool calls across loop iterations. */
-export function AssistantTurn({ messages, results, tools, running }: { messages: Message[]; results: Map<string, Extract<Part, { type: 'tool_result' }>>; tools: Record<string, ToolLive>; running: boolean }) {
+export function AssistantTurn({
+  messages,
+  results,
+  tools,
+  running,
+  sessionId,
+  canUndo,
+}: {
+  messages: Message[];
+  results: Map<string, Extract<Part, { type: 'tool_result' }>>;
+  tools: Record<string, ToolLive>;
+  running: boolean;
+  sessionId?: string;
+  canUndo?: boolean;
+}) {
   const blocks: ReactElement[] = [];
+  const diffs: string[] = [];
   let textForCopy = '';
   messages.forEach((m, mi) => {
     m.parts.forEach((p, pi) => {
@@ -236,6 +340,7 @@ export function AssistantTurn({ messages, results, tools, running }: { messages:
         blocks.push(<Markdown key={key} text={p.text} />);
       } else if (p.type === 'tool_call') {
         const r = results.get(p.id);
+        if (r && !r.isError && typeof r.meta?.diff === 'string') diffs.push(r.meta.diff);
         blocks.push(<ToolCard key={key} id={p.id} name={p.name} input={p.input} live={tools[p.id]} result={r ? { content: r.content, isError: r.isError, meta: r.meta, images: r.images, durationMs: r.meta?.durationMs } : undefined} pending={running && !r} />);
       }
     });
@@ -245,6 +350,7 @@ export function AssistantTurn({ messages, results, tools, running }: { messages:
   return (
     <div className="assistant-turn">
       {blocks}
+      {!running && diffs.length > 0 && <FilesChanged changes={collectChanges(diffs)} sessionId={sessionId} canUndo={canUndo} />}
       {textForCopy && !running && (
         <div className="turn-actions">
           <CopyButton text={textForCopy.trim()} />

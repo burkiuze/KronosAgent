@@ -38,7 +38,24 @@ const base = {
 export const THEMES: Theme[] = [
   {
     id: 'kronos',
-    name: 'Kronos',
+    name: 'Graphite',
+    description: 'Neutral graphite with a calm blue accent — the default',
+    light: {
+      ...base, danger: '#dc2626', success: '#16a34a',
+      bg: '#f6f6f6', panel: '#ffffff', sidebar: '#f3f3f3', elev: '#ffffff', hover: '#ececec', border: '#e4e4e4', text: '#1a1a1a',
+      dim: '#5b5b5b', faint: '#959595', accent: '#2563eb', accentFg: '#ffffff', accentSoft: '#e7eefc', user: '#f4f4f4', code: '#f6f6f6',
+      wallpaper: 'none',
+    },
+    dark: {
+      ...base, danger: '#f87171', success: '#4ade80', warning: '#fbbf24',
+      bg: '#161616', panel: '#1e1e1e', sidebar: '#1b1b1b', elev: '#262626', hover: '#2b2b2b', border: '#323232', text: '#ececec',
+      dim: '#b4b4b4', faint: '#7c7c7c', accent: '#3b82f6', accentFg: '#ffffff', accentSoft: '#1d2b42', user: '#262626', code: '#1a1a1a',
+      wallpaper: 'none',
+    },
+  },
+  {
+    id: 'titan',
+    name: 'Titan',
     description: 'Glass neutrals with titan-gold accents',
     light: {
       ...base, bg: '#f6f5f1', panel: '#fbfaf7', sidebar: '#f0eee8', elev: '#ffffff', hover: '#ebe8df', border: '#e2ded3', text: '#1d1b16',

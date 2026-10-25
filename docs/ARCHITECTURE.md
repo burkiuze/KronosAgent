@@ -31,7 +31,7 @@ runtime object.
 | `packages/core` (`@kronos/core`) | Types, config/profiles, providers, the agent loop, tools, safety, memory, skills, sessions, artifacts, cron, MCP client/server, media, messaging senders, the `Kronos` runtime. No HTTP server, no UI. |
 | `packages/gateway` (`@kronos/gateway`) | `Gateway.start(rt)` — HTTP router (`/api/*`), WebSocket streaming (`/ws`), PTY terminal (`/ws/terminal`), OpenAI-compatible API (`/v1`), webhooks (`/hooks/*`), static UI, the `Hub` that runs/queues chats, and the messaging `PlatformManager`. |
 | `packages/cli` (`kronos-agent`) | The `kronos` binary: REPL with streaming markdown renderer, subcommands, setup wizard, importers. |
-| `apps/web` (`@kronos/web`) | React 19 + Vite UI. A tiny external store (`useSyncExternalStore`), a reconnecting WebSocket, i18n (en/tr), 8 themes. Served by the gateway. |
+| `apps/web` (`@kronos/web`) | React 19 + Vite UI. A tiny external store (`useSyncExternalStore`), a reconnecting WebSocket, i18n (en/tr), 9 themes. Served by the gateway. |
 | `apps/desktop` (`@kronos/desktop`) | Electron shell: embeds the runtime + gateway on loopback with a per-launch token (or attaches to a running gateway), tray, menus, global shortcut, notifications, deep links, auto-update. |
 
 ## The runtime (`packages/core/src/runtime.ts`)

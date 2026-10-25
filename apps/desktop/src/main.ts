@@ -138,7 +138,7 @@ function createWindow(): void {
     show: false,
     title: 'Kronos',
     icon: appIcon(),
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121317' : '#f7f5f0',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#ffffff',
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 14, y: 14 },
     autoHideMenuBar: !isMac,

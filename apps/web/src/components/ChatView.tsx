@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Download, GitFork, KeyRound, Minimize2, Pencil, RefreshCw, RotateCcw, Trash2, Undo2, ListTodo, Bug, Search as SearchIcon, Newspaper, CalendarClock, Code, Feather } from 'lucide-react';
+import { ChevronDown, Download, GitFork, KeyRound, Minimize2, Pencil, RefreshCw, RotateCcw, Trash2, Undo2, Bug, Search as SearchIcon, Newspaper, CalendarClock, Code, Feather, CircleCheck, Circle, LoaderCircle } from 'lucide-react';
 import { chatOf, deleteSession, loadSession, openSession, refreshSessions, renameSession, sendMessage, setState, toast, undoLast, useStore } from '../lib/store';
 import { downloadUrl, post } from '../lib/api';
 import { t } from '../lib/i18n';
+import { shortDuration, tokens as fmtTokens } from '../lib/format';
 import type { Message, Part } from '../lib/types';
 import { AssistantTurn, Markdown, ThinkingBlock, TodoList, ToolCard, UserMessage } from './Message';
 import { ClarifyCard, PermissionCard, SubagentPanel } from './Cards';
@@ -176,6 +177,46 @@ function ChatHeader({ sessionId }: { sessionId: string }) {
   );
 }
 
+/** Right-hand rail: the task at a glance and its live plan (like a PR checklist). */
+function ProgressRail({ sessionId }: { sessionId: string }) {
+  const chat = useStore((s) => chatOf(s.currentId));
+  const session = useStore((s) => s.sessions.find((x) => x.id === sessionId));
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!chat.running) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [chat.running]);
+  const todos = chat.todos;
+  const done = todos.filter((td) => td.status === 'completed').length;
+  const usage = chat.usage ?? session?.usage;
+  const total = usage ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens : 0;
+  const elapsed = chat.running && chat.runStartedAt ? now - chat.runStartedAt : chat.lastRunMs;
+  const finished = !chat.running && todos.length > 0 && done === todos.length;
+  const meta = [todos.length ? `${done}/${todos.length}` : '', elapsed ? shortDuration(elapsed) : '', total ? `${fmtTokens(total)} ${t('progress.tokens')}` : ''].filter(Boolean).join(' · ');
+  return (
+    <aside className="progress-rail">
+      <div className="rail-card">
+        <div className="rail-task">
+          <span className={`rail-status ${chat.running ? 'running' : finished ? 'done' : ''}`}>
+            {chat.running ? <LoaderCircle size={20} className="spin" /> : finished ? <CircleCheck size={20} /> : <Circle size={20} />}
+          </span>
+          <div className="rail-task-text">
+            <div className="rail-title">{session?.title ?? ''}</div>
+            {meta && <div className="rail-meta">{meta}</div>}
+          </div>
+        </div>
+        {todos.length > 0 && (
+          <div className="rail-progress">
+            <div className="rail-label">{t('progress.title')}</div>
+            <TodoList todos={todos} />
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 export function ChatView() {
   const currentId = useStore((s) => s.currentId);
   const chat = useStore((s) => chatOf(s.currentId));
@@ -185,7 +226,7 @@ export function ChatView() {
   const stick = useRef(true);
   const { items, results } = useMemo(() => buildItems(chat.messages), [chat.messages]);
   const subagents = Object.values(chat.subagents);
-  const activeTodos = chat.todos.length > 0 && chat.todos.some((td) => td.status !== 'completed' && td.status !== 'cancelled');
+  const showRail = chat.todos.length > 0;
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -206,71 +247,79 @@ export function ChatView() {
   }
 
   const lastIsAssistant = items[items.length - 1]?.kind === 'assistant';
+  const lastAssistantIndex = items.map((x) => x.kind).lastIndexOf('assistant');
   const live = chat.live;
   return (
     <div className="chat">
       <ChatHeader sessionId={currentId} />
-      <div
-        className="chat-scroll"
-        ref={scroller}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-        }}
-      >
-        <div className="thread">
-          {items.map((it, i) => {
-            if (it.kind === 'user') return <UserMessage key={it.m.id} message={it.m} />;
-            if (it.kind === 'summary')
-              return (
-                <details key={it.m.id} className="summary-divider">
-                  <summary>— {t('chat.compacted')} —</summary>
-                  <Markdown text={it.m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('').replace(/<\/?[a-z_]+>/g, '')} />
-                </details>
-              );
-            if (it.kind === 'notice')
-              return (
-                <div key={it.m.id} className="notice">
-                  {it.m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('')}
-                </div>
-              );
-            return <AssistantTurn key={it.ms[0]?.id ?? i} messages={it.ms} results={results} tools={chat.tools} running={chat.running && i === items.length - 1} />;
-          })}
-          {chat.pendingUser && <UserMessage message={chat.pendingUser} pending />}
-          {chat.running && (
-            <div className={`assistant-turn live ${lastIsAssistant ? 'continued' : ''}`}>
-              {live.map((li, i) => {
-                if (li.kind === 'thinking') return <ThinkingBlock key={i} text={li.text} live={i === live.length - 1} />;
-                if (li.kind === 'text') return <Markdown key={i} text={li.text} />;
-                const tl = chat.tools[li.id];
-                return tl ? <ToolCard key={li.id} id={li.id} name={tl.name} input={tl.input} live={tl} pending /> : null;
+      <div className={`chat-columns ${showRail ? 'with-rail' : ''}`}>
+        <div className="chat-main">
+          <div
+            className="chat-scroll"
+            ref={scroller}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            }}
+          >
+            <div className="thread">
+              {items.map((it, i) => {
+                if (it.kind === 'user') return <UserMessage key={it.m.id} message={it.m} />;
+                if (it.kind === 'summary')
+                  return (
+                    <details key={it.m.id} className="summary-divider">
+                      <summary>— {t('chat.compacted')} —</summary>
+                      <Markdown text={it.m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('').replace(/<\/?[a-z_]+>/g, '')} />
+                    </details>
+                  );
+                if (it.kind === 'notice')
+                  return (
+                    <div key={it.m.id} className="notice">
+                      {it.m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('')}
+                    </div>
+                  );
+                return (
+                  <AssistantTurn
+                    key={it.ms[0]?.id ?? i}
+                    messages={it.ms}
+                    results={results}
+                    tools={chat.tools}
+                    running={chat.running && i === items.length - 1}
+                    sessionId={currentId}
+                    canUndo={!chat.running && i === lastAssistantIndex}
+                  />
+                );
               })}
-              {!live.length && <ThinkingBlock text="" live />}
+              {chat.pendingUser && <UserMessage message={chat.pendingUser} pending />}
+              {chat.running && (
+                <div className={`assistant-turn live ${lastIsAssistant ? 'continued' : ''}`}>
+                  {live.map((li, i) => {
+                    if (li.kind === 'thinking') return <ThinkingBlock key={i} text={li.text} live={i === live.length - 1} />;
+                    if (li.kind === 'text') return <Markdown key={i} text={li.text} />;
+                    const tl = chat.tools[li.id];
+                    return tl ? <ToolCard key={li.id} id={li.id} name={tl.name} input={tl.input} live={tl} pending /> : null;
+                  })}
+                  {!live.length && <ThinkingBlock text="" live />}
+                </div>
+              )}
+              {subagents.length > 0 && chat.running && <SubagentPanel agents={subagents} />}
+              {chat.notices.filter((n) => n.level !== 'info').slice(-2).map((n) => (
+                <div key={n.id} className={`notice ${n.level}`}>
+                  {n.text}
+                </div>
+              ))}
+              {permissions.map((p) => (
+                <PermissionCard key={p.requestId} req={p} />
+              ))}
+              {clarify.map((c) => (
+                <ClarifyCard key={c.requestId} req={c} />
+              ))}
             </div>
-          )}
-          {subagents.length > 0 && chat.running && <SubagentPanel agents={subagents} />}
-          {chat.notices.filter((n) => n.level !== 'info').slice(-2).map((n) => (
-            <div key={n.id} className={`notice ${n.level}`}>
-              {n.text}
-            </div>
-          ))}
-          {permissions.map((p) => (
-            <PermissionCard key={p.requestId} req={p} />
-          ))}
-          {clarify.map((c) => (
-            <ClarifyCard key={c.requestId} req={c} />
-          ))}
-        </div>
-      </div>
-      {activeTodos && (
-        <div className="todo-float">
-          <div className="todo-float-head">
-            <ListTodo size={13} /> Plan · {chat.todos.filter((td) => td.status === 'completed').length}/{chat.todos.length}
           </div>
-          <TodoList todos={chat.todos} />
+          <Composer />
         </div>
-      )}
-      <Composer />
+        {showRail && <ProgressRail sessionId={currentId} />}
+      </div>
     </div>
   );
 }

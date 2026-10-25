@@ -45,7 +45,7 @@ export function Modal({ open, onClose, children, wide, className = '' }: { open:
 }
 
 /** Small anchored popover menu. */
-export function Menu({ trigger, children, align = 'left' }: { trigger: (open: () => void) => ReactNode; children: (close: () => void) => ReactNode; align?: 'left' | 'right' }) {
+export function Menu({ trigger, children, align = 'left', up }: { trigger: (open: () => void) => ReactNode; children: (close: () => void) => ReactNode; align?: 'left' | 'right'; up?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -64,7 +64,7 @@ export function Menu({ trigger, children, align = 'left' }: { trigger: (open: ()
   return (
     <div className="menu-wrap" ref={ref}>
       {trigger(() => setOpen((o) => !o))}
-      {open && <div className={`menu ${align}`}>{children(() => setOpen(false))}</div>}
+      {open && <div className={`menu ${align} ${up ? 'up' : ''}`}>{children(() => setOpen(false))}</div>}
     </div>
   );
 }

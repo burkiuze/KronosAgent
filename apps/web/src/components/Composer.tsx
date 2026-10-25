@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, ChevronDown, FileText, Folder, Mic, MicOff, Paperclip, Plus, Square, X, Zap } from 'lucide-react';
+import { ArrowUp, Brain, Check, ChevronDown, FilePen, FileText, Folder, Hand, ListChecks, Mic, MicOff, Paperclip, Plus, Square, X, Zap, type LucideIcon } from 'lucide-react';
 import { get, api } from '../lib/api';
 import { chatOf, getState, loadSession, newChat, sendMessage, undoLast, setSessionMode, setState, stopRun, toast, useStore } from '../lib/store';
-import { useConfig } from '../lib/config';
+import { updateConfig, useConfig } from '../lib/config';
 import { VoiceInput } from '../lib/voice';
 import { t } from '../lib/i18n';
-import type { FilePart, ImagePart, PermissionMode } from '../lib/types';
+import type { FilePart, ImagePart, ModelInfo, PermissionMode } from '../lib/types';
 import { ModelPicker } from './ModelPicker';
 import { Menu, MenuItem } from './ui';
 
@@ -16,7 +16,43 @@ interface Command {
 }
 
 const MODE_IDS: PermissionMode[] = ['ask', 'auto-edit', 'yolo', 'plan'];
-const modeLabel = (m: PermissionMode) => ({ id: m, label: t(`mode.${m}`), hint: t(`mode.${m}.hint`) });
+const MODE_ICONS: Record<PermissionMode, LucideIcon> = { ask: Hand, 'auto-edit': FilePen, yolo: Zap, plan: ListChecks };
+const modeLabel = (m: PermissionMode) => ({ id: m, label: t(`mode.${m}`), hint: t(`mode.${m}.hint`), Icon: MODE_ICONS[m] });
+
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+// friendly model names for the composer (fetched once)
+let modelNames: Record<string, string> | null = null;
+let modelNamesLoading: Promise<void> | null = null;
+function useModelName(ref: string | undefined, fallback?: string): string {
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (modelNames || modelNamesLoading) return;
+    modelNamesLoading = get<{ models: ModelInfo[] }>('/api/models')
+      .then((r) => {
+        modelNames = Object.fromEntries(r.models.map((m) => [m.ref, m.name]));
+        force((n) => n + 1);
+      })
+      .catch(() => undefined);
+  }, []);
+  if (!ref) return fallback ?? 'model';
+  return modelNames?.[ref] ?? fallback ?? (ref.split(':').slice(1).join(':') || ref);
+}
+
+/** Small circular gauge for how full the context window is. */
+function ContextRing({ percent }: { percent: number }) {
+  const r = 7;
+  const c = 2 * Math.PI * r;
+  const p = Math.max(0, Math.min(100, percent));
+  return (
+    <span className={`ctx-ring ${p >= 80 ? 'hot' : ''}`} title={t('composer.ctxTitle', { p })}>
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
+        <circle cx="9" cy="9" r={r} className="ctx-track" />
+        <circle cx="9" cy="9" r={r} className="ctx-fill" strokeDasharray={`${(c * p) / 100} ${c}`} transform="rotate(-90 9 9)" />
+      </svg>
+    </span>
+  );
+}
 
 const TEXT_EXT = /\.(txt|md|markdown|json|ya?ml|toml|ini|csv|tsv|log|xml|html?|css|scss|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|h|cpp|cs|php|sh|bash|zsh|sql|lua|r|dart|vue|svelte|env|conf|cfg)$/i;
 
@@ -176,8 +212,11 @@ export function Composer({ centered }: { centered?: boolean }) {
   };
 
   const sendOnEnter = config?.ui?.sendOnEnter !== false;
-  const placeholder = currentId ? t('chat.followup') : t('chat.placeholder');
-  const modeInfo = MODE_IDS.includes(mode) ? modeLabel(mode) : undefined;
+  const placeholder = currentId ? t('composer.followup') : t('chat.placeholder');
+  const modeInfo = modeLabel(MODE_IDS.includes(mode) ? mode : 'ask');
+  const modelRef = session?.model || getState().draftModel || status?.model?.ref;
+  const modelName = useModelName(modelRef, modelRef === status?.model?.ref ? status?.model?.name : undefined);
+  const effort = (config?.model?.effort as (typeof EFFORTS)[number] | undefined) ?? 'high';
 
   return (
     <div
@@ -226,116 +265,145 @@ export function Composer({ centered }: { centered?: boolean }) {
             ))}
           </div>
         )}
-        <div className="composer-row">
+        <input ref={fileInput} type="file" multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} />
+        <textarea
+          ref={ref}
+          rows={centered ? 2 : 1}
+          value={text}
+          placeholder={placeholder}
+          onChange={(e) => {
+            setText(e.target.value);
+            setMenuIndex(0);
+          }}
+          onPaste={(e) => {
+            const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
+            if (imgs.length) {
+              e.preventDefault();
+              void addFiles(imgs);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (menuItems.length) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setMenuIndex((i) => (i + 1) % menuItems.length);
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setMenuIndex((i) => (i - 1 + menuItems.length) % menuItems.length);
+                return;
+              }
+              if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && mentionItems.length)) {
+                e.preventDefault();
+                applyMenu(menuIndex);
+                return;
+              }
+            }
+            if (e.key === 'Enter' && !e.shiftKey && (sendOnEnter || e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void submit();
+            }
+            if (e.key === 'Escape' && running && currentId) stopRun(currentId);
+          }}
+        />
+        <div className="composer-bar">
           <Menu
+            up={!centered}
             trigger={(open) => (
-              <button className="icon-btn" title="Attach" onClick={open}>
-                <Plus size={17} />
+              <button className="cbtn icon" title={t('composer.attach')} onClick={open}>
+                <Plus size={18} />
               </button>
             )}
           >
             {(close) => (
               <>
                 <MenuItem icon={<Paperclip size={14} />} onClick={() => (close(), fileInput.current?.click())}>
-                  Attach files or images
+                  {t('composer.attach')}
                 </MenuItem>
                 <MenuItem icon={<Folder size={14} />} onClick={() => (close(), setText((x) => `${x}@`), ref.current?.focus())}>
-                  Mention a workspace file (@)
+                  {t('composer.mention')}
                 </MenuItem>
                 <MenuItem icon={<Zap size={14} />} onClick={() => (close(), setText('/'), ref.current?.focus())}>
-                  Run a skill or command (/)
+                  {t('composer.command')}
                 </MenuItem>
               </>
             )}
           </Menu>
-          <input ref={fileInput} type="file" multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} />
-          <textarea
-            ref={ref}
-            rows={1}
-            value={text}
-            placeholder={placeholder}
-            onChange={(e) => {
-              setText(e.target.value);
-              setMenuIndex(0);
-            }}
-            onPaste={(e) => {
-              const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
-              if (imgs.length) {
-                e.preventDefault();
-                void addFiles(imgs);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (menuItems.length) {
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setMenuIndex((i) => (i + 1) % menuItems.length);
-                  return;
-                }
-                if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setMenuIndex((i) => (i - 1 + menuItems.length) % menuItems.length);
-                  return;
-                }
-                if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && mentionItems.length)) {
-                  e.preventDefault();
-                  applyMenu(menuIndex);
-                  return;
-                }
-              }
-              if (e.key === 'Enter' && !e.shiftKey && (sendOnEnter || e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                void submit();
-              }
-              if (e.key === 'Escape' && running && currentId) stopRun(currentId);
-            }}
-          />
-          <button className={`icon-btn ${listening ? 'recording' : ''}`} title="Voice input" onClick={toggleVoice}>
-            {listening ? <MicOff size={16} /> : <Mic size={16} />}
-          </button>
-          {running && !text.trim() ? (
-            <button className="send-btn stop" title={`${t('chat.stop')} (Esc)`} onClick={() => currentId && stopRun(currentId)}>
-              <Square size={13} fill="currentColor" />
-            </button>
-          ) : (
-            <button className="send-btn" title={t('chat.send')} disabled={!text.trim() && !attachments.length} onClick={() => void submit()}>
-              <ArrowUp size={16} />
-            </button>
-          )}
-        </div>
-        <div className="composer-foot">
           <Menu
+            up={!centered}
             trigger={(open) => (
-              <button className={`chip mode-${mode}`} onClick={open} title={modeInfo?.hint}>
-                {modeInfo?.label} <ChevronDown size={11} />
+              <button className={`cbtn mode-${mode}`} onClick={open} title={modeInfo.hint}>
+                <modeInfo.Icon size={16} />
+                <span className="cbtn-label">{modeInfo.label}</span>
+                <ChevronDown size={13} className="cbtn-chev" />
               </button>
             )}
           >
             {(close) => (
-              <>
+              <div className="mode-menu">
                 {MODE_IDS.map(modeLabel).map((m) => (
-                  <MenuItem
+                  <button
                     key={m.id}
+                    className={`mode-option ${m.id === mode ? 'selected' : ''}`}
                     onClick={() => {
                       close();
                       if (currentId) void setSessionMode(currentId, m.id);
                       else setState({ draftMode: m.id });
                     }}
                   >
-                    <b>{m.label}</b> <span className="muted">— {m.hint}</span>
+                    <m.Icon size={16} />
+                    <span className="mode-text">
+                      <b>{m.label}</b>
+                      <small>{m.hint}</small>
+                    </span>
+                    {m.id === mode && <Check size={14} />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </Menu>
+          <ContextRing percent={chat.context?.percent ?? 0} />
+          <ModelPicker>
+            <span className="cbtn" title={modelRef}>
+              <span className="cbtn-label">{modelName}</span>
+              <ChevronDown size={13} className="cbtn-chev" />
+            </span>
+          </ModelPicker>
+          <Menu
+            up={!centered}
+            trigger={(open) => (
+              <button className="cbtn" onClick={open} title={t('effort.label')}>
+                <Brain size={16} />
+                <span className="cbtn-label">{t(`effort.${effort}`)}</span>
+              </button>
+            )}
+          >
+            {(close) => (
+              <>
+                <div className="menu-title">{t('effort.label')}</div>
+                {EFFORTS.map((ef) => (
+                  <MenuItem key={ef} icon={ef === effort ? <Check size={14} /> : <span className="menu-icon-gap" />} onClick={() => (close(), void updateConfig({ model: { effort: ef } }))}>
+                    {t(`effort.${ef}`)}
                   </MenuItem>
                 ))}
               </>
             )}
           </Menu>
-          <ModelPicker>
-            <span className="chip">
-              {(session?.model || getState().draftModel || status?.model?.ref || '').split(':').slice(1).join(':') || 'model'} <ChevronDown size={11} />
-            </span>
-          </ModelPicker>
-          {chat.context && <span className="chip ghost">{chat.context.percent}% {t('composer.context')}</span>}
+          {chat.queue.length > 0 && <span className="cbtn-note">{t('chat.queued')} · {chat.queue.length}</span>}
           <div className="flex-1" />
-          <span className="composer-hint">{running ? t('composer.hintRunning') : t('composer.hint')}</span>
+          <button className={`cbtn icon ${listening ? 'recording' : ''}`} title="Voice input" onClick={toggleVoice}>
+            {listening ? <MicOff size={16} /> : <Mic size={16} />}
+          </button>
+          {running && !text.trim() ? (
+            <button className="send-btn stop" title={`${t('chat.stop')} (Esc)`} onClick={() => currentId && stopRun(currentId)}>
+              <Square size={12} fill="currentColor" />
+            </button>
+          ) : (
+            <button className="send-btn" title={t('chat.send')} disabled={!text.trim() && !attachments.length} onClick={() => void submit()}>
+              <ArrowUp size={17} />
+            </button>
+          )}
         </div>
       </div>
     </div>

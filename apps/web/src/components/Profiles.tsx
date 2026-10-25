@@ -100,12 +100,12 @@ function ManageProfiles({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function ProfilesMenu({ trigger }: { trigger: (open: () => void) => ReactNode }) {
+export function ProfilesMenu({ trigger, up }: { trigger: (open: () => void) => ReactNode; up?: boolean }) {
   const status = useStore((s) => s.status);
   const [manage, setManage] = useState(false);
   return (
     <>
-      <Menu align="right" trigger={trigger}>
+      <Menu align={up ? 'left' : 'right'} up={up} trigger={trigger}>
         {(close) => (
           <div className="profiles-pop">
             <div className="profiles-title">{t('profiles.title')}</div>

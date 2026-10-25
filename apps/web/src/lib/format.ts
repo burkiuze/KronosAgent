@@ -24,6 +24,17 @@ export function cost(usd = 0): string {
   return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
 }
 
+/** Compact duration: 12s · 2m · 1h 5m */
+export function shortDuration(ms: number): string {
+  const tr = getLang() === 'tr';
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}${tr ? 'sn' : 's'}`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}${tr ? 'dk' : 'm'}`;
+  const h = Math.floor(m / 60);
+  return `${h}${tr ? 'sa' : 'h'}${m % 60 ? ` ${m % 60}${tr ? 'dk' : 'm'}` : ''}`;
+}
+
 export function clock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   const m = Math.floor(s / 60);
