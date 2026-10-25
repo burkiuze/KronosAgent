@@ -1,7 +1,7 @@
 // Bundles the Electron main + preload with esbuild and stages the web UI and bundled skills
 // next to them, so `electron .` and electron-builder both find everything under apps/desktop.
 import { build } from 'esbuild';
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,12 +46,9 @@ cpSync(web, join(here, 'web'), { recursive: true });
 rmSync(join(here, 'skills'), { recursive: true, force: true });
 if (existsSync(join(root, 'skills'))) cpSync(join(root, 'skills'), join(here, 'skills'), { recursive: true });
 
-// app icons (generated from the procedural Kronos portrait unless real artwork exists)
+// app icons from the brand artwork (assets/brand)
 mkdirSync(join(here, 'build'), { recursive: true });
-if (!existsSync(join(here, 'build/icon.png'))) {
-  const { kronosPortrait } = await import(join(root, 'packages/core/dist/media/png.js'));
-  writeFileSync(join(here, 'build/icon.png'), kronosPortrait('Kronos, keeper of time', 1024));
-  writeFileSync(join(here, 'build/tray.png'), kronosPortrait('Kronos, keeper of time', 64));
-}
+cpSync(join(root, 'assets/brand/kronos-1024.png'), join(here, 'build/icon.png'));
+cpSync(join(root, 'assets/brand/kronos-tray-64.png'), join(here, 'build/tray.png'));
 
 console.log(`desktop bundle ready${watch ? ' (watch not supported, rebuilt once)' : ''}`);

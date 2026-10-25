@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="apps/web/public/kronos.svg" width="88" alt="Kronos" />
+<img src="assets/brand/kronos-512.png" width="120" alt="Kronos" />
 
 # KRONOS AGENT
 
