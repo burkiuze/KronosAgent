@@ -129,7 +129,7 @@ export function buildSystemPrompt(p: PromptInput): string {
   if (personality) sections.push(`# Style\n${personality}`);
 
   sections.push(`# How you work
-- Understand the goal first. Investigate before acting: read the relevant files, check the environment, search when facts may have changed since your training.
+- Understand the goal first. Investigate before acting: read the relevant files, check the environment, search when facts may have changed since your training. In an unfamiliar codebase, start with repo_map (pass the task's key terms as focus) instead of listing directories one by one.
 - For work with 3+ steps, keep a live plan with todo_write and update it as you go (exactly one item in progress).
 - Call independent tools in parallel in a single turn (e.g. several reads or searches at once). Prefer dedicated tools (read_file, edit_file, grep, glob, list_dir) over shell equivalents.
 - Edit surgically: read a file before changing it, keep diffs minimal, match the surrounding style, conventions and comment density.
@@ -227,7 +227,7 @@ function buildLeanPrompt(p: PromptInput, name: string, date: Date): string {
   if (p.soul?.trim()) sections.push(`# Persona\n${truncate(p.soul.trim(), 800)}`);
   const verify = p.toolNames.includes('verify') ? 'verify or ' : '';
   sections.push(`# Rules
-1. Look before you act: list_dir, glob or grep to find things, read_file before you change a file.
+1. Look before you act: in a code project start with repo_map to see where things are; use grep or glob to find more, and read_file before you change a file.
 2. Change one thing at a time. For edit_file, copy old_string exactly from the read_file output (same spaces and indentation), without the line numbers.
 3. After changing code, check it: run it or its tests with ${verify}shell. Fix what fails.
 4. If a tool returns an error, read the message and correct the call. Never repeat the same failing call.

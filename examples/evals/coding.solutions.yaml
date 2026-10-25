@@ -1,0 +1,265 @@
+# Reference solutions for coding.yaml (files written over the fixtures). Used by the suite's CI
+# self-test; never shown to the agent being evaluated.
+pagination off-by-one:
+  src/paginate.js: |
+    /** Returns the items of a 1-based page. */
+    export function paginate(items, page, perPage = 10) {
+      const start = (page - 1) * perPage;
+      return items.slice(start, start + perPage);
+    }
+cli json flag:
+  src/cli.js: |
+    import { readFileSync } from 'node:fs';
+    import { totals } from './totals.js';
+
+    const args = process.argv.slice(2);
+    const json = args.includes('--json');
+    const file = args.find((a) => !a.startsWith('--'));
+    if (!file) {
+      console.error('usage: node src/cli.js [--json] <file.csv>');
+      process.exit(1);
+    }
+    const t = totals(readFileSync(file, 'utf8'));
+    if (json) console.log(JSON.stringify(t));
+    else for (const [region, total] of Object.entries(t)) console.log(`${region.padEnd(8)} ${total}`);
+rename across files:
+  src/users.js: |
+    const USERS = { 1: 'ada', 2: 'linus' };
+
+    export function getUser(id) {
+      return USERS[id] ?? null;
+    }
+  src/greet.js: |
+    import { getUser } from './users.js';
+
+    export const greet = (id) => `hello ${getUser(id) ?? 'stranger'}`;
+  src/admin.js: |
+    import { getUser } from './users.js';
+
+    export function isAdmin(id) {
+      return getUser(id) === 'ada';
+    }
+crash from a log:
+  src/config.js: |
+    const DEFAULTS = { attempts: 3, delayMs: 200 };
+
+    export function retryPolicy(config) {
+      const retry = config.retry ?? {};
+      return { attempts: retry.attempts ?? DEFAULTS.attempts, delayMs: retry.delayMs ?? DEFAULTS.delayMs };
+    }
+implement to spec:
+  src/semver.js: |
+    function parse(v) {
+      const [core, pre] = v.replace(/^v/, '').split(/-(.*)/s);
+      return { nums: core.split('.').map(Number), pre: pre ? pre.split('.') : [] };
+    }
+
+    function comparePart(x, y) {
+      const nx = /^\d+$/.test(x);
+      const ny = /^\d+$/.test(y);
+      if (nx && ny) return Math.sign(Number(x) - Number(y));
+      if (nx) return -1;
+      if (ny) return 1;
+      return x < y ? -1 : x > y ? 1 : 0;
+    }
+
+    export function compare(a, b) {
+      const A = parse(a);
+      const B = parse(b);
+      for (let i = 0; i < 3; i++) if (A.nums[i] !== B.nums[i]) return Math.sign(A.nums[i] - B.nums[i]);
+      if (!A.pre.length || !B.pre.length) return A.pre.length ? -1 : B.pre.length ? 1 : 0;
+      for (let i = 0; i < Math.max(A.pre.length, B.pre.length); i++) {
+        if (A.pre[i] === undefined) return -1;
+        if (B.pre[i] === undefined) return 1;
+        const c = comparePart(A.pre[i], B.pre[i]);
+        if (c) return c;
+      }
+      return 0;
+    }
+python shared state bug:
+  shop/cart.py: |
+    class Cart:
+        def __init__(self, owner, items=None):
+            self.owner = owner
+            self.items = list(items) if items is not None else []
+
+        def add(self, item, qty=1):
+            self.items.append((item, qty))
+            return self
+
+        def count(self):
+            return sum(q for _, q in self.items)
+python feature with tests:
+  report.py: |
+    import csv
+    import io
+
+
+    class Report:
+        def __init__(self, columns, rows):
+            self.columns = columns
+            self.rows = rows  # list of dicts
+
+        def total(self, column):
+            return sum(r[column] for r in self.rows)
+
+        def to_csv(self):
+            buf = io.StringIO()
+            w = csv.writer(buf, lineterminator='\n')
+            w.writerow(self.columns)
+            for r in self.rows:
+                w.writerow([r.get(c, '') for c in self.columns])
+            return buf.getvalue()
+  test_report.py: |
+    import unittest
+    from report import Report
+
+
+    class ReportTest(unittest.TestCase):
+        def test_total(self):
+            self.assertEqual(Report(['n'], [{'n': 1}, {'n': 2}]).total('n'), 3)
+
+        def test_to_csv(self):
+            self.assertEqual(Report(['a'], [{'a': 'x,y'}]).to_csv(), 'a\n"x,y"\n')
+
+
+    if __name__ == '__main__':
+        unittest.main()
+async forEach bug:
+  src/sync.js: |
+    import { save, saved } from './store.js';
+
+    export async function syncAll(records) {
+      await Promise.all(records.map((r) => save(r)));
+      return saved.length;
+    }
+parse durations:
+  src/duration.js: |
+    const UNITS = { d: 86400, h: 3600, m: 60, s: 1 };
+
+    /** "1h30m", "45s", "1d 2h" → seconds */
+    export function parseDuration(text) {
+      const s = String(text).trim();
+      if (!/^(\d+[dhms]\s*)+$/.test(s)) throw new Error(`invalid duration: ${text}`);
+      let total = 0;
+      for (const [, n, u] of s.matchAll(/(\d+)([dhms])/g)) total += Number(n) * UNITS[u];
+      return total;
+    }
+make it fast:
+  src/dedupe.js: |
+    export function uniqueEmails(list) {
+      const seen = new Set();
+      for (const raw of list) seen.add(raw.trim().toLowerCase());
+      return [...seen];
+    }
+path traversal:
+  src/static.js: |
+    import { resolve, sep } from 'node:path';
+
+    /** Maps a URL path to a file inside root, or null when it is not allowed. */
+    export function resolveSafe(root, urlPath) {
+      let decoded;
+      try {
+        decoded = decodeURIComponent(urlPath);
+      } catch {
+        return null;
+      }
+      const base = resolve(root);
+      const full = resolve(base, '.' + sep + decoded);
+      return full.startsWith(base + sep) ? full : null;
+    }
+config migration:
+  src/migrate.js: |
+    const KNOWN = new Set(['version', 'host', 'port', 'user', 'ssl', 'pool']);
+
+    export function migrate(config) {
+      if (config.version === 2) return config;
+      if (config.version !== 1) throw new Error(`unsupported config version: ${config.version}`);
+      const port = config.port === undefined ? 5432 : Number(config.port);
+      const ssl = ['yes', 'true', '1', true].includes(config.ssl);
+      const out = { version: 2, database: { url: `postgres://${config.user}@${config.host}:${port}`, ssl }, pool: { max: config.pool ?? 5 } };
+      const legacy = Object.fromEntries(Object.entries(config).filter(([k]) => !KNOWN.has(k)));
+      if (Object.keys(legacy).length) out.legacy = legacy;
+      return out;
+    }
+write the tests:
+  test/slugify.test.js: |
+    import { test } from 'node:test';
+    import assert from 'node:assert';
+    import { slugify } from '../src/slugify.js';
+
+    test('basic', () => assert.equal(slugify('Hello World'), 'hello-world'));
+    test('accents', () => assert.equal(slugify('Héllo Çağ'), 'hello-cag'));
+    test('punctuation and repeats', () => assert.equal(slugify('a,  b!!c'), 'a-b-c'));
+    test('trim separators', () => assert.equal(slugify('  --x--  '), 'x'));
+    test('empty', () => assert.equal(slugify(''), ''));
+event emitter once:
+  src/emitter.js: |
+    export class Emitter {
+      #handlers = new Map();
+
+      on(event, fn) {
+        const list = this.#handlers.get(event) ?? [];
+        list.push(fn);
+        this.#handlers.set(event, list);
+        return () => this.off(event, fn);
+      }
+
+      off(event, fn) {
+        const list = this.#handlers.get(event) ?? [];
+        this.#handlers.set(event, list.filter((f) => f !== fn));
+      }
+
+      once(event, fn) {
+        const wrapper = (...args) => {
+          this.off(event, wrapper);
+          fn(...args);
+        };
+        return this.on(event, wrapper);
+      }
+
+      emit(event, ...args) {
+        for (const fn of [...(this.#handlers.get(event) ?? [])]) fn(...args);
+      }
+    }
+feature across layers:
+  src/model.js: |
+    let next = 1;
+
+    export const PRIORITIES = ['high', 'normal', 'low'];
+
+    export function createTodo(title, priority = 'normal') {
+      if (!title?.trim()) throw new Error('title required');
+      if (!PRIORITIES.includes(priority)) throw new Error(`invalid priority: ${priority}`);
+      return { id: next++, title: title.trim(), done: false, priority, createdAt: Date.now() + next };
+    }
+  src/store.js: |
+    import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+    export function load(file) {
+      if (!existsSync(file)) return [];
+      return JSON.parse(readFileSync(file, 'utf8')).map((t) => ({ id: t.id, title: t.title, done: t.done, priority: t.priority ?? 'normal', createdAt: t.createdAt }));
+    }
+
+    export function save(file, todos) {
+      writeFileSync(file, JSON.stringify(todos.map((t) => ({ id: t.id, title: t.title, done: t.done, priority: t.priority, createdAt: t.createdAt }))));
+    }
+  src/todos.js: |
+    import { createTodo, PRIORITIES } from './model.js';
+
+    export class Todos {
+      constructor(items = []) {
+        this.items = items;
+      }
+
+      add(title, priority) {
+        const t = createTodo(title, priority);
+        this.items.push(t);
+        return t;
+      }
+
+      list() {
+        const rank = (t) => PRIORITIES.indexOf(t.priority ?? 'normal');
+        return [...this.items].sort((a, b) => rank(a) - rank(b) || a.createdAt - b.createdAt);
+      }
+    }

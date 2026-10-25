@@ -25,6 +25,8 @@ export interface EvalCheck {
   /** shell command run in the workspace must exit 0 */
   command?: string;
   max_tool_calls?: number;
+  /** how the check is named in reports (default: derived from the check) */
+  label?: string;
 }
 
 export interface EvalCase {
@@ -96,7 +98,7 @@ export function parseEvalSuite(text: string, fallbackName = 'suite'): EvalSuite 
     if (!checks.length) throw new Error(`case "${name}" needs at least one check`);
     for (const check of checks) {
       const keys = Object.keys(check);
-      if (!keys.length || keys.some((k) => !['contains', 'not_contains', 'regex', 'file', 'file_contains', 'command', 'max_tool_calls'].includes(k)))
+      if (!keys.length || keys.some((k) => !['contains', 'not_contains', 'regex', 'file', 'file_contains', 'command', 'max_tool_calls', 'label'].includes(k)))
         throw new Error(`case "${name}": unknown check ${JSON.stringify(check)}`);
     }
     return { name, prompt: c.prompt, files: (c.files as Record<string, string>) ?? undefined, checks, mode: (c.mode as PermissionMode) ?? undefined };
@@ -142,7 +144,9 @@ async function runChecks(checks: EvalCheck[], ws: string, text: string, toolCall
     }
     if (c.command !== undefined) {
       const r = await runShell(c.command, { cwd: ws, timeoutMs: 300_000 });
-      out.push({ label: `\`${c.command}\` passes`, ok: r.exitCode === 0, detail: r.exitCode === 0 ? undefined : r.output.trim().split('\n').slice(-5).join('\n') });
+      const first = c.command.split('\n')[0] as string;
+      const label = c.label ?? `\`${first.length > 60 || first !== c.command ? `${first.slice(0, 57)}…` : first}\` passes`;
+      out.push({ label, ok: r.exitCode === 0, detail: r.exitCode === 0 ? undefined : r.output.trim().split('\n').slice(-5).join('\n') });
     }
     if (c.max_tool_calls !== undefined) out.push({ label: `≤ ${c.max_tool_calls} tool calls`, ok: toolCalls <= c.max_tool_calls, detail: `${toolCalls} calls` });
   }

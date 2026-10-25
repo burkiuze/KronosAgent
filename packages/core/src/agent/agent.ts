@@ -52,7 +52,7 @@ const ANNOUNCED_ACTION =
   /(?:^|[.!?:\n]\s*)(?:(?:ok(?:ay)?|now|next|first|then|so),?\s+)?(?:let me|let's|i(?:'ll| will| am going to|'m going to| need to| should))\s+(?:now\s+|first\s+|then\s+)?(?:run|check|read|open|create|write|edit|update|modify|look|search|list|install|test|fix|implement|add|start|try|use|call|execute|inspect|examine|verify|make|change|apply|build|compile|grep|fetch|explore|review|find)\b[^.!?\n]{0,160}[.:…]?\s*$|\S+(?:acağım|eceğim)(?:\s+\S+){0,2}[.:…!]?\s*$/i;
 
 /** The tool set of lean mode: enough to do real work, small enough for a small model to use well. */
-const LEAN_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'shell', 'list_dir', 'grep', 'glob', 'todo_write', 'web_search', 'web_fetch', 'memory', 'ask_user', 'verify', 'exit_plan_mode']);
+const LEAN_TOOLS = new Set(['repo_map', 'read_file', 'write_file', 'edit_file', 'shell', 'list_dir', 'grep', 'glob', 'todo_write', 'web_search', 'web_fetch', 'memory', 'ask_user', 'verify', 'exit_plan_mode']);
 
 /** tools whose results get a syntax check of the files they changed */
 const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);

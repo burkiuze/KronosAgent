@@ -88,6 +88,9 @@ Portal, Together, Fireworks, Cerebras, Moonshot, Z.ai, **Ollama** and **LM Studi
 any OpenAI-compatible endpoint as a custom provider. Switch models mid-conversation; use a
 cheaper model for subagents.
 
+A **repository map** (`repo_map`) shows the agent where everything lives in one call — files
+ranked by how much other code depends on them, with every class, function and method signature.
+
 **Built to get good work out of small, old and free models too.** The harness absorbs what weaker
 models get wrong: broken tool-call JSON is repaired; calls written as text in a model's own format
 (Hermes/Qwen `<tool_call>`, Llama `<function=…>`, Mistral `[TOOL_CALLS]`, XML, fenced JSON) are
@@ -110,7 +113,9 @@ every failed call comes back with the expected arguments and an example.
   of skills that stop helping.
 - **`kronos eval`**: run a suite several times per model × effort configuration in isolated
   runtimes and get pass rate ± spread, tokens, cost, time and tool calls — measure before you
-  trust a change.
+  trust a change. Ships with a **15-task coding benchmark** (`examples/evals/coding.yaml`: bugs,
+  features, refactors, a crash log, performance, security, writing tests; JS and Python) graded
+  by hidden checks, each proven in CI to fail as given and pass with a reference solution.
 - **Personas & profiles**: `SOUL.md` personality, 7 built-in styles, and isolated profiles
   (work / personal / family bot) each with their own memory, skills, sessions and keys.
 
@@ -169,7 +174,7 @@ kronos -c                                    # continue the last CLI session
 kronos model list | set openrouter:qwen/qwen3-coder
 kronos keys set ANTHROPIC_API_KEY
 kronos skills list | install <git-url> | create | history <name> | rollback <name> | prune
-kronos eval examples/evals/smoke.yaml --repeats 3 --model sonnet,opus   # measure, with spread
+kronos eval examples/evals/coding.yaml --repeats 3 --model sonnet,ollama:qwen2.5-coder:7b   # benchmark
 kronos cron add "every monday at 9am" "Draft the weekly status report" --deliver telegram:<chat>
 kronos mcp add github -- npx -y @modelcontextprotocol/server-github
 kronos profile create work && kronos -p work

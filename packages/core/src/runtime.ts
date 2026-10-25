@@ -10,6 +10,8 @@ import { activeProfile, bundledSkillsDir, ensureDirs, kronosHome, profileDir, pr
 import { ProviderRegistry } from './providers/registry.js';
 import { ToolRegistry } from './tools/registry.js';
 import { fileTools } from './tools/files.js';
+import { repoMapTool } from './tools/repomap.js';
+import type { ToolDefinition } from './tools/types.js';
 import { shellTools } from './tools/shell.js';
 import { webTools } from './tools/web.js';
 import { browserTools, BrowserManager } from './tools/browser.js';
@@ -129,7 +131,7 @@ export class Kronos {
     k.hooks = new HookRunner(k.config.hooks);
     k.backend = createBackend(k.config.terminal, k.workspace());
     k.mcp = new McpManager(k.tools);
-    k.tools.registerAll([...fileTools, ...shellTools, ...webTools, ...browserTools, ...agenticTools]);
+    k.tools.registerAll([...fileTools, repoMapTool as ToolDefinition, ...shellTools, ...webTools, ...browserTools, ...agenticTools]);
     k.cron = new CronScheduler(k.paths.cron, (job) => k.runCronJob(job), { timezone: k.config.cron.timezone, maxConcurrent: k.config.cron.maxConcurrent });
     k.cron.on((e) => k.events.emit({ type: 'cron', kind: e.type, job: e.job }));
     if (opts.connectMcp !== false && Object.keys(k.config.mcp.servers).length) await k.mcp.connectAll(k.config.mcp.servers);

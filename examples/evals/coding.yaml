@@ -1,0 +1,529 @@
+# Coding benchmark: 15 realistic tasks — bugs, features, refactors, debugging from a log,
+# performance, security, writing tests — in JavaScript and Python (no dependencies to install).
+# Every case is graded by hidden checks the agent never sees, and CI proves each one fails on the
+# starting code and passes with a reference solution (coding.solutions.yaml), so a pass is real.
+#
+#   kronos eval examples/evals/coding.yaml --repeats 3
+#   kronos eval examples/evals/coding.yaml --model ollama:qwen2.5-coder:7b --repeats 3
+#   matrix: { model: [sonnet, "ollama:qwen2.5-coder:7b"], effort: [medium] }   # compare configurations
+name: coding
+repeats: 3
+timeoutSec: 900
+cases:
+  - name: pagination off-by-one
+    prompt: Page 2 of the product list shows the wrong products (it repeats the last item of page 1). Fix it.
+    files:
+      package.json: |
+        {
+          "name": "shop",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/paginate.js: |
+        /** Returns the items of a 1-based page. */
+        export function paginate(items, page, perPage = 10) {
+          const start = (page - 1) * perPage - 1;
+          return items.slice(Math.max(0, start), start + perPage);
+        }
+      src/products.js: |
+        import { paginate } from './paginate.js';
+
+        export const products = Array.from({ length: 25 }, (_, i) => ({ id: i + 1, name: `Product ${i + 1}` }));
+
+        export function productPage(page) {
+          return paginate(products, page).map((p) => p.id);
+        }
+      test/paginate.test.js: |
+        import { test } from 'node:test';
+        import assert from 'node:assert';
+        import { productPage } from '../src/products.js';
+
+        test('first page', () => assert.deepEqual(productPage(1), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+    checks:
+      - label: project tests
+        command: npm test
+      - label: hidden tests
+        command: "node --input-type=module -e \"import assert from 'node:assert'; import { paginate } from './src/paginate.js'; const xs = Array.from({length: 25}, (_, i) => i + 1); assert.deepEqual(paginate(xs, 1), [1,2,3,4,5,6,7,8,9,10]); assert.deepEqual(paginate(xs, 2), [11,12,13,14,15,16,17,18,19,20]); assert.deepEqual(paginate(xs, 3), [21,22,23,24,25]); assert.deepEqual(paginate(xs, 4), []); assert.deepEqual(paginate(xs, 2, 5), [6,7,8,9,10]);\""
+  - name: cli json flag
+    prompt: 'Add a --json flag to the CLI: `node src/cli.js --json sales.csv` should print the totals as a JSON object ({"region": total, ...}) instead of the text table. Keep the text output as it is.'
+    files:
+      package.json: |
+        {
+          "name": "sales",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      sales.csv: |
+        region,amount
+        north,10
+        south,5
+        north,2.5
+        east,7
+      src/totals.js: |
+        export function totals(csv) {
+          const [, ...rows] = csv.trim().split('\n');
+          const out = {};
+          for (const row of rows) {
+            const [region, amount] = row.split(',');
+            out[region] = (out[region] ?? 0) + Number(amount);
+          }
+          return out;
+        }
+      src/cli.js: |
+        import { readFileSync } from 'node:fs';
+        import { totals } from './totals.js';
+
+        const file = process.argv[2];
+        if (!file) {
+          console.error('usage: node src/cli.js <file.csv>');
+          process.exit(1);
+        }
+        const t = totals(readFileSync(file, 'utf8'));
+        for (const [region, total] of Object.entries(t)) console.log(`${region.padEnd(8)} ${total}`);
+    checks:
+      - label: --json prints the totals
+        command: node src/cli.js --json sales.csv | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.north!==12.5||j.south!==5||j.east!==7)process.exit(1)})"
+      - label: text output unchanged
+        command: node src/cli.js sales.csv | grep -E '^north +12.5$'
+  - name: rename across files
+    prompt: Rename the function getUsr to getUser everywhere in this project (definition, imports and call sites). Behaviour must not change.
+    files:
+      package.json: |
+        {
+          "name": "users",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/users.js: |
+        const USERS = { 1: 'ada', 2: 'linus' };
+
+        export function getUsr(id) {
+          return USERS[id] ?? null;
+        }
+      src/greet.js: |
+        import { getUsr } from './users.js';
+
+        export const greet = (id) => `hello ${getUsr(id) ?? 'stranger'}`;
+      src/admin.js: |
+        import { getUsr } from './users.js';
+
+        export function isAdmin(id) {
+          return getUsr(id) === 'ada';
+        }
+      test/users.test.js: |
+        import { test } from 'node:test';
+        import assert from 'node:assert';
+        import { greet } from '../src/greet.js';
+        import { isAdmin } from '../src/admin.js';
+
+        test('greet', () => assert.equal(greet(2), 'hello linus'));
+        test('admin', () => assert.equal(isAdmin(1), true));
+    checks:
+      - label: no getUsr left
+        command: "! grep -rn getUsr src test"
+      - label: project tests
+        command: npm test
+      - label: hidden tests
+        command: node --input-type=module -e "import assert from 'node:assert'; import { getUser } from './src/users.js'; assert.equal(getUser(1), 'ada'); assert.equal(getUser(3), null);"
+  - name: crash from a log
+    prompt: The service crashed in production, see logs/crash.log. Find the cause and fix it so it cannot happen again (configs without a retry section are valid).
+    files:
+      package.json: |
+        {
+          "name": "svc",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      logs/crash.log: |
+        2026-10-20T09:14:02Z INFO starting worker pool
+        2026-10-20T09:14:02Z ERROR unhandled exception
+        TypeError: Cannot read properties of undefined (reading 'attempts')
+            at retryPolicy (file:///srv/app/src/config.js:4:25)
+            at startWorker (file:///srv/app/src/worker.js:5:17)
+      src/config.js: |
+        const DEFAULTS = { attempts: 3, delayMs: 200 };
+
+        export function retryPolicy(config) {
+          const attempts = config.retry.attempts ?? DEFAULTS.attempts;
+          const delayMs = config.retry.delayMs ?? DEFAULTS.delayMs;
+          return { attempts, delayMs };
+        }
+      src/worker.js: |
+        import { retryPolicy } from './config.js';
+
+        export function startWorker(config) {
+          const name = config.name ?? 'worker';
+          const policy = retryPolicy(config);
+          return `${name}: ${policy.attempts} attempts, ${policy.delayMs}ms`;
+        }
+    checks:
+      - label: hidden tests
+        command: "node --input-type=module -e \"import assert from 'node:assert'; import { startWorker } from './src/worker.js'; assert.equal(startWorker({ name: 'w' }), 'w: 3 attempts, 200ms'); assert.equal(startWorker({ retry: { attempts: 5 } }), 'worker: 5 attempts, 200ms'); assert.equal(startWorker({ retry: { attempts: 0, delayMs: 0 } }), 'worker: 0 attempts, 0ms');\""
+  - name: implement to spec
+    prompt: Implement compare() in src/semver.js following the spec in SPEC.md.
+    files:
+      package.json: |
+        {
+          "name": "semver",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      SPEC.md: |
+        # compare(a, b)
+
+        Compares two versions of the form MAJOR.MINOR.PATCH with an optional pre-release (`1.2.3-beta.1`).
+        Returns -1 if a < b, 0 if equal, 1 if a > b.
+
+        - Major, minor and patch compare numerically (`1.10.0` > `1.9.0`).
+        - A version with a pre-release is lower than the same version without one (`1.0.0-rc.1` < `1.0.0`).
+        - Pre-releases compare part by part, split on dots: numeric parts numerically, others as strings,
+          numeric parts are lower than non-numeric ones, and a shorter list is lower when all earlier parts are equal
+          (`alpha` < `alpha.1` < `alpha.beta` < `beta` < `beta.2` < `beta.11` < `rc.1`).
+        - A leading `v` is ignored (`v1.2.3` equals `1.2.3`).
+      src/semver.js: |
+        export function compare(a, b) {
+          throw new Error('not implemented');
+        }
+    checks:
+      - label: hidden tests
+        command: node --input-type=module -e "import assert from 'node:assert'; import { compare } from './src/semver.js'; const order = ['1.0.0-alpha','1.0.0-alpha.1','1.0.0-alpha.beta','1.0.0-beta','1.0.0-beta.2','1.0.0-beta.11','1.0.0-rc.1','1.0.0','1.9.0','1.10.0','2.0.0']; for (let i = 0; i < order.length; i++) for (let j = 0; j < order.length; j++) assert.equal(compare(order[i], order[j]), Math.sign(i - j), order[i] + ' vs ' + order[j]); assert.equal(compare('v1.2.3', '1.2.3'), 0);"
+  - name: python shared state bug
+    prompt: Carts created separately end up sharing items in this Python project. Find and fix the bug.
+    files:
+      shop/__init__.py: ""
+      tests/__init__.py: ""
+      shop/cart.py: |
+        class Cart:
+            def __init__(self, owner, items=[]):
+                self.owner = owner
+                self.items = items
+
+            def add(self, item, qty=1):
+                self.items.append((item, qty))
+                return self
+
+            def count(self):
+                return sum(q for _, q in self.items)
+      tests/test_cart.py: |
+        import unittest
+        from shop.cart import Cart
+
+
+        class CartTest(unittest.TestCase):
+            def test_add(self):
+                self.assertEqual(Cart('a').add('apple', 2).count(), 2)
+
+
+        if __name__ == '__main__':
+            unittest.main()
+    checks:
+      - label: project tests
+        command: python3 -m unittest discover -s tests -t .
+      - label: hidden tests
+        command: |-
+          python3 - <<'PY'
+          from shop.cart import Cart
+          a = Cart('a').add('x')
+          b = Cart('b')
+          assert b.count() == 0, b.items
+          c = Cart('c', [('y', 2)])
+          assert c.count() == 2
+          assert Cart('d').count() == 0
+          PY
+  - name: python feature with tests
+    prompt: Add a to_csv() method to Report in report.py that returns the rows as CSV text with a header line (columns in the order of `columns`). Values containing commas, quotes or newlines must be quoted correctly. Add a test for it.
+    files:
+      report.py: |
+        class Report:
+            def __init__(self, columns, rows):
+                self.columns = columns
+                self.rows = rows  # list of dicts
+
+            def total(self, column):
+                return sum(r[column] for r in self.rows)
+      test_report.py: |
+        import unittest
+        from report import Report
+
+
+        class ReportTest(unittest.TestCase):
+            def test_total(self):
+                self.assertEqual(Report(['n'], [{'n': 1}, {'n': 2}]).total('n'), 3)
+
+
+        if __name__ == '__main__':
+            unittest.main()
+    checks:
+      - label: hidden tests
+        command: |-
+          python3 - <<'PY'
+          import csv, io
+          from report import Report
+          r = Report(['name', 'note'], [{'note': 'a, b', 'name': 'x'}, {'name': 'y', 'note': 'say "hi"'}, {'name': 'z', 'note': 'two\nlines'}])
+          out = r.to_csv()
+          rows = list(csv.reader(io.StringIO(out)))
+          assert rows[0] == ['name', 'note'], rows
+          assert rows[1] == ['x', 'a, b'], rows
+          assert rows[2] == ['y', 'say "hi"'], rows
+          assert rows[3] == ['z', 'two\nlines'], rows
+          PY
+      - label: a CSV test was added and passes
+        command: python3 -m unittest test_report -v 2>&1 | grep -qiE 'csv.* \.\.\. ok'
+  - name: async forEach bug
+    prompt: syncAll() in src/sync.js returns before the records are saved, so the count it reports is often 0. Fix it; saves may run in parallel.
+    files:
+      package.json: |
+        {
+          "name": "sync",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/store.js: |
+        export const saved = [];
+
+        export async function save(record) {
+          await new Promise((r) => setTimeout(r, 5 + Math.random() * 10));
+          saved.push(record.id);
+        }
+      src/sync.js: |
+        import { save, saved } from './store.js';
+
+        export async function syncAll(records) {
+          records.forEach(async (r) => {
+            await save(r);
+          });
+          return saved.length;
+        }
+    checks:
+      - label: hidden tests
+        command: "node --input-type=module -e \"import assert from 'node:assert'; import { syncAll } from './src/sync.js'; const n = await syncAll(Array.from({ length: 20 }, (_, i) => ({ id: i }))); assert.equal(n, 20);\""
+  - name: parse durations
+    prompt: parseDuration("1h30m") works but parseDuration("45s"), parseDuration("2h") and parseDuration("1d 2h") do not. Make it handle any combination of d, h, m and s (optionally separated by spaces) and throw on invalid input.
+    files:
+      package.json: |
+        {
+          "name": "dur",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/duration.js: |
+        /** "1h30m" → seconds */
+        export function parseDuration(text) {
+          const m = /^(\d+)h(\d+)m$/.exec(text);
+          return Number(m[1]) * 3600 + Number(m[2]) * 60;
+        }
+    checks:
+      - label: hidden tests
+        command: node --input-type=module -e "import assert from 'node:assert'; import { parseDuration as p } from './src/duration.js'; assert.equal(p('1h30m'), 5400); assert.equal(p('45s'), 45); assert.equal(p('2h'), 7200); assert.equal(p('1d 2h'), 93600); assert.equal(p('1d2h3m4s'), 93784); for (const bad of ['', 'abc', '5x', '1h 2', 'h']) assert.throws(() => p(bad), bad);"
+  - name: make it fast
+    prompt: uniqueEmails() in src/dedupe.js is far too slow on our real data (200k addresses). Make it fast without changing its results (first occurrence wins, comparison ignores case and surrounding spaces).
+    files:
+      package.json: |
+        {
+          "name": "dedupe",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/dedupe.js: |
+        export function uniqueEmails(list) {
+          const out = [];
+          for (const raw of list) {
+            const email = raw.trim().toLowerCase();
+            if (!out.some((e) => e === email)) out.push(email);
+          }
+          return out;
+        }
+    checks:
+      - label: hidden tests
+        command: "node --input-type=module -e \"import assert from 'node:assert'; import { uniqueEmails } from './src/dedupe.js'; assert.deepEqual(uniqueEmails([' A@x.io', 'a@x.io', 'b@x.io ', 'B@X.IO']), ['a@x.io', 'b@x.io']); const big = Array.from({ length: 60000 }, (_, i) => 'user' + (i % 50000) + '@x.io'); const t = performance.now(); const r = uniqueEmails(big); const ms = performance.now() - t; assert.equal(r.length, 50000); assert.ok(ms < 1000, 'took ' + ms + 'ms');\""
+  - name: path traversal
+    prompt: "Security review flagged src/static.js: resolveSafe() lets a request escape the public directory. Fix it so only files inside the root can be served (return null otherwise)."
+    files:
+      package.json: |
+        {
+          "name": "static",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/static.js: |
+        import { join } from 'node:path';
+
+        /** Maps a URL path to a file inside root, or null when it is not allowed. */
+        export function resolveSafe(root, urlPath) {
+          const clean = decodeURIComponent(urlPath).replace('../', '');
+          return join(root, clean);
+        }
+    checks:
+      - label: hidden tests
+        command: node --input-type=module -e "import assert from 'node:assert'; import { join } from 'node:path'; import { resolveSafe as r } from './src/static.js'; const root = '/srv/public'; assert.equal(r(root, '/index.html'), join(root, 'index.html')); assert.equal(r(root, '/css/a.css'), join(root, 'css/a.css')); assert.equal(r(root, '/a/../b.txt'), join(root, 'b.txt')); for (const bad of ['/../etc/passwd', '/../../etc/passwd', '/..%2F..%2Fetc/passwd', '/a/../../../etc/passwd', '%2e%2e/%2e%2e/secret', '/../public2/x', '/....//....//etc/passwd']) { const out = r(root, bad); assert.ok(out === null || out.startsWith(root + '/'), bad + ' -> ' + out); }"
+  - name: config migration
+    prompt: Implement migrate() in src/migrate.js as described in docs/MIGRATION.md.
+    files:
+      package.json: |
+        {
+          "name": "cfg",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      docs/MIGRATION.md: |
+        # Config v1 → v2
+
+        migrate(config) takes a v1 or v2 config object and returns a v2 config (a v2 config is returned unchanged).
+
+        v1 looks like: `{ "version": 1, "host": "db.local", "port": "5432", "user": "app", "ssl": "yes", "pool": 10 }`
+
+        v2 looks like: `{ "version": 2, "database": { "url": "postgres://app@db.local:5432", "ssl": true }, "pool": { "max": 10 } }`
+
+        Rules:
+        - `port` becomes a number in the URL; when missing, use 5432.
+        - `ssl` is true for "yes", "true", "1" or true; false otherwise.
+        - `pool` defaults to 5.
+        - Unknown v1 keys are kept under `legacy` (omit `legacy` when there are none).
+        - Any other version throws an Error.
+      src/migrate.js: |
+        export function migrate(config) {
+          throw new Error('not implemented');
+        }
+    checks:
+      - label: hidden tests
+        command: "node --input-type=module -e \"import assert from 'node:assert'; import { migrate } from './src/migrate.js'; assert.deepEqual(migrate({ version: 1, host: 'db.local', port: '5432', user: 'app', ssl: 'yes', pool: 10 }), { version: 2, database: { url: 'postgres://app@db.local:5432', ssl: true }, pool: { max: 10 } }); assert.deepEqual(migrate({ version: 1, host: 'h', user: 'u', ssl: 'no', region: 'eu' }), { version: 2, database: { url: 'postgres://u@h:5432', ssl: false }, pool: { max: 5 }, legacy: { region: 'eu' } }); const v2 = { version: 2, database: { url: 'postgres://x@y:1', ssl: false }, pool: { max: 1 } }; assert.deepEqual(migrate(v2), v2); assert.throws(() => migrate({ version: 3 }));\""
+  - name: write the tests
+    prompt: src/slugify.js has no tests. Add a test file with node:test covering its behaviour, including edge cases (accents, punctuation, repeated separators, leading/trailing separators, empty input). Do not change slugify itself.
+    files:
+      package.json: |
+        {
+          "name": "slug",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/slugify.js: |
+        /** "Héllo, World!" → "hello-world" */
+        export function slugify(text) {
+          return String(text)
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        }
+    checks:
+      - label: 4+ tests, all passing
+        command: node --test --test-reporter=tap 2>&1 | grep -qE '^# pass ([4-9]|[1-9][0-9])$' && node --test --test-reporter=tap 2>&1 | grep -qE '^# fail 0$'
+      - label: slugify unchanged
+        command: grep -q "normalize('NFKD')" src/slugify.js
+      - label: the tests catch a broken slugify
+        command: cp src/slugify.js .slugify.orig && printf 'export function slugify(t) { return String(t).toLowerCase().replace(/ /g, "-"); }\n' > src/slugify.js; if node --test >/dev/null 2>&1; then mv .slugify.orig src/slugify.js; exit 1; fi; mv .slugify.orig src/slugify.js
+  - name: event emitter once
+    prompt: Handlers registered with once() in src/emitter.js fire more than once. Fix it.
+    files:
+      package.json: |
+        {
+          "name": "emitter",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/emitter.js: |
+        export class Emitter {
+          #handlers = new Map();
+
+          on(event, fn) {
+            const list = this.#handlers.get(event) ?? [];
+            list.push(fn);
+            this.#handlers.set(event, list);
+            return () => this.off(event, fn);
+          }
+
+          off(event, fn) {
+            const list = this.#handlers.get(event) ?? [];
+            this.#handlers.set(event, list.filter((f) => f !== fn));
+          }
+
+          once(event, fn) {
+            const wrapper = (...args) => {
+              this.off(event, fn);
+              fn(...args);
+            };
+            return this.on(event, wrapper);
+          }
+
+          emit(event, ...args) {
+            for (const fn of this.#handlers.get(event) ?? []) fn(...args);
+          }
+        }
+    checks:
+      - label: hidden tests
+        command: node --input-type=module -e "import assert from 'node:assert'; import { Emitter } from './src/emitter.js'; const e = new Emitter(); let a = 0, b = 0; e.once('x', () => a++); e.on('x', () => b++); e.emit('x'); e.emit('x'); assert.equal(a, 1); assert.equal(b, 2); let c = 0; const off = e.once('y', () => c++); off(); e.emit('y'); assert.equal(c, 0); let d = 0; e.once('z', () => { d++; e.emit('z'); }); e.emit('z'); assert.equal(d, 1);"
+  - name: feature across layers
+    prompt: 'Todos need a priority: "high", "normal" (default) or "low". Add it to the model, keep it when saving and loading, and make list() return high first, then normal, then low (oldest first within a priority). Old saved files without priorities must still load.'
+    files:
+      package.json: |
+        {
+          "name": "todos",
+          "type": "module",
+          "scripts": {
+            "test": "node --test"
+          }
+        }
+      src/model.js: |
+        let next = 1;
+
+        export function createTodo(title) {
+          if (!title?.trim()) throw new Error('title required');
+          return { id: next++, title: title.trim(), done: false, createdAt: Date.now() + next };
+        }
+      src/store.js: |
+        import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+        export function load(file) {
+          if (!existsSync(file)) return [];
+          return JSON.parse(readFileSync(file, 'utf8')).map((t) => ({ id: t.id, title: t.title, done: t.done, createdAt: t.createdAt }));
+        }
+
+        export function save(file, todos) {
+          writeFileSync(file, JSON.stringify(todos.map((t) => ({ id: t.id, title: t.title, done: t.done, createdAt: t.createdAt }))));
+        }
+      src/todos.js: |
+        import { createTodo } from './model.js';
+
+        export class Todos {
+          constructor(items = []) {
+            this.items = items;
+          }
+
+          add(title) {
+            const t = createTodo(title);
+            this.items.push(t);
+            return t;
+          }
+
+          list() {
+            return [...this.items].sort((a, b) => a.createdAt - b.createdAt);
+          }
+        }
+    checks:
+      - label: hidden tests
+        command: "node --input-type=module -e \"import assert from 'node:assert'; import { writeFileSync } from 'node:fs'; import { tmpdir } from 'node:os'; import { join } from 'node:path'; import { Todos } from './src/todos.js'; import { load, save } from './src/store.js'; const t = new Todos(); t.add('a'); t.add('b', 'low'); t.add('c', 'high'); t.add('d'); t.add('e', 'high'); assert.deepEqual(t.list().map((x) => x.title), ['c', 'e', 'a', 'd', 'b']); assert.equal(t.items[0].priority, 'normal'); assert.throws(() => t.add('x', 'urgent')); const f = join(tmpdir(), 'kronos-todos-' + process.pid + '.json'); save(f, t.items); const back = new Todos(load(f)); assert.deepEqual(back.list().map((x) => [x.title, x.priority]), [['c','high'],['e','high'],['a','normal'],['d','normal'],['b','low']]); writeFileSync(f, JSON.stringify([{ id: 9, title: 'old', done: false, createdAt: 1 }])); assert.equal(load(f)[0].priority, 'normal');\""

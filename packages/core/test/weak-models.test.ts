@@ -267,7 +267,8 @@ describe('lean mode', () => {
       const s = env.rt.createSession({ source: 'test' });
       await env.rt.agent(s.id).run('hello');
       const session = env.rt.sessions.get(s.id);
-      expect(session?.toolNames?.length).toBeLessThanOrEqual(14);
+      expect(session?.toolNames?.length).toBeLessThanOrEqual(15);
+      expect(session?.toolNames).toContain("repo_map");
       expect(session?.toolNames).toContain('edit_file');
       expect(session?.toolNames).not.toContain('delegate');
       expect(session?.systemPrompt).toContain('# Rules');
