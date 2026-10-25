@@ -77,8 +77,9 @@ offline demo model is only used when you pick it explicitly (`--model demo`), e.
   acceptance checks, propose → probe → compose for hard decisions, verify, independent review.
 - **Streaming everything**: thinking summaries, text, tool input as it is generated, tool
   progress, diffs, todos and subagent activity — in the CLI, the app and chat platforms.
-- **Parallel-safe tool execution**, automatic context compaction, retries with backoff and a
-  **fallback chain** across providers.
+- **Parallel-safe tool execution**, tiered context management (old tool outputs cleared first,
+  then older turns summarised and archived — never lost), a syntax check right after every edit,
+  retries with backoff and a **fallback chain** across providers.
 
 ### Any model, no lock-in
 Anthropic (Claude Opus 5.5 by default, with prompt caching, adaptive thinking and server-side

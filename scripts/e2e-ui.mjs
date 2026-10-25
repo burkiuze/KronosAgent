@@ -185,6 +185,12 @@ try {
     await page.locator('.mode-option', { hasText: 'Plan mode' }).click();
     await page.locator('.composer-bar .cbtn.mode-plan').waitFor({ timeout: 5000 });
   });
+  await check('compaction keeps recent turns and earlier messages stay readable', async () => {
+    await send('/compact');
+    await page.locator('.summary-divider').first().waitFor({ timeout: 15000 });
+    await page.locator('.earlier-toggle button', { hasText: 'Show earlier messages' }).click();
+    await page.locator('.earlier .user-msg', { hasText: 'Hello Kronos!' }).waitFor({ timeout: 5000 });
+  });
   for (const [label, sel] of [
     ['Skills', '.page'],
     ['Messaging', '.page'],

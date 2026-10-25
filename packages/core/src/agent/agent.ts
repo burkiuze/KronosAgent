@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type {
   AgentEvent,
   ChatRequest,
@@ -29,6 +29,7 @@ import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
 import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
 import { LoopWatch } from './watchdog.js';
+import { formatSyntaxProblems, syntaxProblems } from '../tools/diagnostics.js';
 import { PermissionPolicy, primaryArg } from '../safety/permissions.js';
 import { validateInput } from '../util/schema.js';
 import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError } from '../util/misc.js';
@@ -38,6 +39,9 @@ import { NotConnectedError } from '../providers/errors.js';
 import { logger } from '../util/log.js';
 
 const log = logger('agent');
+
+/** tools whose results get a syntax check of the files they changed */
+const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);
 
 export interface AgentOptions {
   runtime: Kronos;
@@ -897,6 +901,25 @@ export class Agent {
       content = `${t.text}\n\n[full output (${out.content.length.toLocaleString()} chars) saved to ${file} — read_file/grep it for details]`;
       meta = { ...meta, truncated: true, fullOutputPath: file };
     }
+    // a file that no longer parses is reported in the same result, while the change is in view
+    if (!out.isError && EDIT_TOOLS.has(call.name) && this.rt.config.agent.editDiagnostics) {
+      const paths = [...(meta?.paths ?? []), ...(meta?.path ? [meta.path] : [])];
+      let failed = 0;
+      for (const p of [...new Set(paths)].slice(0, 10)) {
+        const abs = isAbsolute(p) ? p : resolve(this.session.cwd, p);
+        let text: string;
+        try {
+          text = readFileSync(abs, 'utf8');
+        } catch {
+          continue; // deleted or moved
+        }
+        const problems = await syntaxProblems(abs, text, this.session.cwd);
+        if (!problems.length) continue;
+        failed += problems.length;
+        content += formatSyntaxProblems(relative(this.session.cwd, abs) || abs, text, problems);
+      }
+      if (failed) meta = { ...meta, syntaxErrors: failed };
+    }
     // remember complete reads (output that was cut is not fully in context, so it does not count)
     const read = meta?.read as { key: string; mtimeMs: number; size: number; lines: number } | undefined;
     if (call.name === 'read_file' && read && !out.isError && !meta?.truncated) {
@@ -948,49 +971,147 @@ export class Agent {
   private async maybeCompact(model: ModelInfo, runId: string, signal: AbortSignal): Promise<void> {
     const c = this.rt.config.agent.compaction;
     if (!c.enabled || this.messages.length < 6) return;
-    const { tokens } = this.contextUsage();
-    if (tokens < model.contextWindow * c.threshold) return;
-    await this.compact(runId, signal);
+    const limit = model.contextWindow * c.threshold;
+    if (this.contextUsage().tokens < limit) return;
+    // 1. cheap first: drop the bodies of old tool outputs (the calls and their order stay)
+    if (c.clearToolResults) {
+      const cleared = this.clearOldToolResults(c.keepToolResults);
+      if (cleared.count) {
+        const now = this.contextUsage().tokens;
+        this.notice('info', `Cleared ${cleared.count} old tool output${cleared.count === 1 ? '' : 's'} (~${cleared.tokens.toLocaleString()} tokens) to make room.`);
+        // enough headroom that the next few steps do not land here again
+        if (now < limit * 0.75) return;
+      }
+    }
+    // 2. summarize everything before the most recent turns
+    try {
+      await this.compact(runId, signal);
+    } catch (e) {
+      if (signal.aborted) throw e;
+      // 3. the summary call failed (provider down, ...): trim instead of failing the user's task
+      this.trimWithoutSummary(runId, errorMessage(e));
+    }
   }
 
   /**
-   * Simple compaction: summarize the whole conversation into one message and start the
-   * next request from it (no earlier turns or reasoning blocks are replayed).
+   * Replaces the content of tool results older than the `keep` most recent ones with a short stub.
+   * Only the in-memory context changes: the stored session keeps every output for the UI and search.
+   */
+  private clearOldToolResults(keep: number): { count: number; tokens: number } {
+    const positions: [number, number][] = [];
+    this.messages.forEach((m, i) => m.parts.forEach((p, j) => p.type === 'tool_result' && positions.push([i, j])));
+    const old = positions.slice(0, Math.max(0, positions.length - keep));
+    let count = 0;
+    let tokens = 0;
+    const changed = new Map<number, Part[]>();
+    for (const [i, j] of old) {
+      const parts = changed.get(i) ?? [...(this.messages[i] as Message).parts];
+      const p = parts[j] as Extract<Part, { type: 'tool_result' }>;
+      if (p.meta?.cleared || p.content.length < 600) continue;
+      tokens += estimateTokens(p.content) - 30;
+      parts[j] = {
+        ...p,
+        content: `[Output cleared to save context (${p.content.length.toLocaleString()} chars). Run the tool again if you need it.]`,
+        images: undefined,
+        meta: { ...p.meta, cleared: true },
+      };
+      changed.set(i, parts);
+      count++;
+    }
+    if (!count) return { count, tokens: 0 };
+    this.messages = this.messages.map((m, i) => (changed.has(i) ? { ...m, parts: changed.get(i) as Part[] } : m));
+    this.contextEpoch += 1; // earlier reads are no longer in context
+    this.lastContextTokens = 0;
+    return { count, tokens: Math.max(0, tokens) };
+  }
+
+  /** Index where the verbatim tail starts: the `turns`-th most recent real user message (not a tool result or summary). */
+  private tailStart(turns: number): number {
+    if (turns <= 0) return this.messages.length;
+    let seen = 0;
+    for (let i = this.messages.length - 1; i > 0; i--) {
+      const m = this.messages[i] as Message;
+      if (m.role === 'user' && m.meta?.kind !== 'summary' && m.parts.some((p) => p.type !== 'tool_result') && ++seen === turns) return i;
+    }
+    return this.messages.length;
+  }
+
+  /** How many recent turns to keep verbatim: as configured, fewer when they alone would fill too much of the window. */
+  private keptTail(model: ModelInfo): number {
+    const c = this.rt.config.agent.compaction;
+    const budget = model.contextWindow * c.threshold * 0.4;
+    for (let turns = c.keepRecentTurns; turns > 0; turns--) {
+      const start = this.tailStart(turns);
+      if (start >= this.messages.length) continue;
+      if (start > 0 && estimateMessagesTokens(this.messages.slice(start)) <= budget) return start;
+    }
+    return this.messages.length;
+  }
+
+  /** Swap the live history for `next`, archiving everything that leaves it (originals, not cleared stubs). */
+  private replaceHistory(next: Message[], runId: string, before: number): { before: number; after: number } {
+    const keep = new Set(next.map((m) => m.id));
+    const stored = this.rt.sessions.messages(this.session.id);
+    const original = new Map(stored.map((m) => [m.id, m]));
+    this.messages = next;
+    this.contextEpoch += 1;
+    // store the kept messages as they were, not with outputs cleared from the context
+    this.rt.sessions.replaceMessages(this.session.id, next.map((m) => original.get(m.id) ?? m));
+    this.rt.sessions.archiveMessages(this.session.id, stored.filter((m) => !keep.has(m.id)));
+    this.lastContextTokens = 0;
+    const after = this.contextUsage().tokens;
+    this.emit({ type: 'compaction', runId, beforeTokens: before, afterTokens: after });
+    return { before, after };
+  }
+
+  /**
+   * Compaction: summarizes everything before the most recent turns (`keepRecentTurns`, kept verbatim)
+   * into one message. Long histories are summarized in chunks, each folding into the running summary.
+   * The replaced messages are archived, so they stay readable and searchable.
    */
   async compact(runId = this.currentRunId, signal?: AbortSignal, focus?: string): Promise<{ before: number; after: number }> {
     const before = this.contextUsage().tokens;
+    const model = this.rt.providers.resolve(this.session.model || undefined);
+    const start = this.keptTail(model);
+    const head = this.messages.slice(0, start);
+    const tail = this.messages.slice(start);
     const lastUser = this.lastUserMessage();
-    const transcript = this.renderTranscript(120_000);
     const summaryModel = this.rt.providers.resolve(this.rt.config.model.summary || this.session.model || undefined);
     const system =
       'You are summarizing a conversation between a user and an autonomous AI agent so the agent can continue seamlessly in a fresh context. ' +
       'Write a dense, structured summary with these sections: ## Goal (the user\'s overall objective and constraints), ## Progress (what has been done, ' +
       'decisions made and why), ## Key facts (file paths, commands, URLs, identifiers, errors and their fixes, user preferences), ## Current state ' +
       '(what is in progress, open problems), ## Next steps. Preserve exact names, paths and values. Do not invent anything.';
-    const res = await this.rt.providers.chat(
-      {
-        model: summaryModel,
-        system,
-        messages: [
-          {
-            id: newId('m_'),
-            role: 'user',
-            parts: [{ type: 'text', text: `${focus ? `Focus especially on: ${focus}\n\n` : ''}<transcript>\n${transcript}\n</transcript>\n\nWrite the summary now.` }],
-            createdAt: Date.now(),
-          },
-        ],
-        tools: [],
-        maxTokens: 8000,
-        effort: 'low',
-        thinking: false,
-        showThinking: false,
-        signal,
-      },
-      () => undefined,
-      [],
-    );
-    const summary = textOf(res.parts).trim() || truncate(transcript, 8000);
-    const latest = lastUser ? truncate(messageText(lastUser), 6000) : '';
+    const chunks = this.transcriptChunks(head, 100_000);
+    let summary = '';
+    for (const [i, chunk] of chunks.entries()) {
+      const prior = summary ? `<summary_so_far>\n${summary}\n</summary_so_far>\n\nThe transcript continues (part ${i + 1} of ${chunks.length}). Update the summary so it covers everything so far.\n\n` : '';
+      const res = await this.rt.providers.chat(
+        {
+          model: summaryModel,
+          system,
+          messages: [
+            {
+              id: newId('m_'),
+              role: 'user',
+              parts: [{ type: 'text', text: `${focus ? `Focus especially on: ${focus}\n\n` : ''}${prior}<transcript>\n${chunk}\n</transcript>\n\nWrite the summary now.` }],
+              createdAt: Date.now(),
+            },
+          ],
+          tools: [],
+          maxTokens: 8000,
+          effort: 'low',
+          thinking: false,
+          showThinking: false,
+          signal,
+        },
+        () => undefined,
+        [],
+      );
+      summary = textOf(res.parts).trim() || summary || truncate(chunk, 8000);
+    }
+    // with no verbatim tail the latest request would be lost inside the summary: repeat it word for word
+    const latest = !tail.length && lastUser ? truncate(messageText(lastUser), 6000) : '';
     const summaryMsg: Message = {
       id: newId('m_'),
       role: 'user',
@@ -1000,36 +1121,73 @@ export class Agent {
           text:
             `<conversation_summary>\nThe earlier conversation was compacted to save context. Summary:\n\n${summary}\n</conversation_summary>` +
             (latest ? `\n\nThe user's most recent request was:\n<latest_request>\n${latest}\n</latest_request>` : '') +
-            '\n\nContinue from here. Re-read files before editing them; do not assume their earlier contents.',
+            (tail.length ? '\n\nThe most recent turns follow verbatim.' : '\n\nContinue from here.') +
+            ' Re-read files before editing them; do not assume their earlier contents. Earlier details can be found with session_search.',
         },
       ],
       createdAt: Date.now(),
-      meta: { kind: 'summary' },
+      meta: { kind: 'summary', archived: head.length },
     };
-    this.messages = [summaryMsg];
-    this.contextEpoch += 1;
-    this.rt.sessions.replaceMessages(this.session.id, this.messages);
-    this.lastContextTokens = 0;
-    const after = this.contextUsage().tokens;
-    this.emit({ type: 'compaction', runId, beforeTokens: before, afterTokens: after });
-    this.notice('info', `Context compacted: ~${before.toLocaleString()} → ~${after.toLocaleString()} tokens.`);
-    return { before, after };
+    const result = this.replaceHistory([summaryMsg, ...tail], runId, before);
+    this.notice('info', `Context compacted: ~${before.toLocaleString()} → ~${result.after.toLocaleString()} tokens${tail.length ? ` (last ${this.rt.config.agent.compaction.keepRecentTurns === 1 ? 'turn' : 'turns'} kept verbatim)` : ''}.`);
+    return result;
   }
 
-  private renderTranscript(maxChars: number): string {
+  /** Last resort when no summary can be made: keep the recent turns and drop the rest (still archived). */
+  private trimWithoutSummary(runId: string, reason: string): void {
+    const before = this.contextUsage().tokens;
+    const model = this.rt.providers.resolve(this.session.model || undefined);
+    let start = this.keptTail(model);
+    if (start >= this.messages.length) start = this.tailStart(1);
+    if (start >= this.messages.length || start <= 0) {
+      // even the current turn is too large: clear every tool output but the latest ones
+      this.clearOldToolResults(2);
+      this.notice('warn', `Context is nearly full and could not be summarized (${truncate(reason, 160)}).`);
+      return;
+    }
+    const dropped = start;
+    const note: Message = {
+      id: newId('m_'),
+      role: 'user',
+      parts: [
+        {
+          type: 'text',
+          text: `<conversation_summary>\nThe earlier conversation (${dropped} messages) was removed to free context; a summary could not be made (${truncate(reason, 200)}). Use session_search to look up earlier details, and re-read files before editing them.\n</conversation_summary>`,
+        },
+      ],
+      createdAt: Date.now(),
+      meta: { kind: 'summary', archived: dropped },
+    };
+    const result = this.replaceHistory([note, ...this.messages.slice(start)], runId, before);
+    this.notice('warn', `Context was full and could not be summarized, so the oldest ${dropped} messages were set aside (~${before.toLocaleString()} → ~${result.after.toLocaleString()} tokens). They are still in the chat history.`);
+  }
+
+  /** The transcript as plain text, split into chunks of at most `maxChars` on message boundaries. */
+  private transcriptChunks(messages: Message[], maxChars: number): string[] {
     const lines: string[] = [];
-    for (const m of this.messages) {
+    for (const m of messages) {
       if (m.role === 'system') continue;
       for (const p of m.parts) {
         if (p.type === 'text' && p.text.trim()) lines.push(`${m.role.toUpperCase()}: ${p.text}`);
-        else if (p.type === 'tool_call') lines.push(`ASSISTANT → ${p.name}(${truncate(JSON.stringify(p.input), 600)})`);
-        else if (p.type === 'tool_result') lines.push(`TOOL ${p.toolName}${p.isError ? ' (error)' : ''}: ${truncate(p.content, 1500)}`);
+        else if (p.type === 'tool_call') lines.push(`ASSISTANT → ${p.name}(${truncate(JSON.stringify(p.input), 1000)})`);
+        else if (p.type === 'tool_result') lines.push(`TOOL ${p.toolName}${p.isError ? ' (error)' : ''}: ${truncateMiddle(p.content, 4000).text}`);
         else if (p.type === 'file') lines.push(`USER attached ${p.name}`);
         else if (p.type === 'image') lines.push('USER attached an image');
       }
     }
-    const all = lines.join('\n\n');
-    return all.length > maxChars ? truncateMiddle(all, maxChars).text : all;
+    const chunks: string[] = [];
+    let cur = '';
+    for (const line of lines) {
+      const l = line.length > maxChars ? truncateMiddle(line, maxChars).text : line;
+      if (cur && cur.length + l.length + 2 > maxChars) {
+        chunks.push(cur);
+        cur = '';
+      }
+      cur += (cur ? '\n\n' : '') + l;
+    }
+    if (cur || !chunks.length) chunks.push(cur);
+    // a pathological history is bounded: keep the first chunk (the original task) and the most recent ones
+    return chunks.length > 8 ? [chunks[0] as string, ...chunks.slice(-7)] : chunks;
   }
 
   // ---------------------------------------------------------------------------

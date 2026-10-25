@@ -1,0 +1,136 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { ProviderError, messageText } from '@kronos/core';
+import type { ChatResponse, Message, ModelInfo, Provider, ToolCallPart } from '@kronos/core';
+import { syntaxProblems } from '../src/tools/diagnostics.js';
+import { makeRuntime, type TestEnv } from './helpers.js';
+
+let env: TestEnv;
+beforeEach(async () => {
+  env = await makeRuntime();
+});
+afterEach(async () => {
+  await env.cleanup();
+});
+
+const usage = { inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 };
+const inject = (id: string, provider: Provider) => (env.rt.providers as unknown as { cache: Map<string, Provider> }).cache.set(id, provider);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const internals = (agent: unknown) => agent as any;
+const userTexts = (msgs: Message[]) => msgs.filter((m) => m.role === 'user' && m.meta?.kind !== 'summary' && m.parts.some((p) => p.type === 'text')).map(messageText);
+
+describe('compaction', () => {
+  it('keeps the most recent turns verbatim and archives the rest, still searchable', async () => {
+    const s = env.rt.createSession({ source: 'test' });
+    const agent = env.rt.agent(s.id);
+    for (const word of ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA']) await agent.run(`list files for ${word}`);
+    const before = env.rt.sessions.messages(s.id).length;
+    const r = await agent.compact();
+    expect(r.after).toBeLessThan(r.before);
+    const live = env.rt.sessions.messages(s.id);
+    expect(live[0]?.meta?.kind).toBe('summary');
+    expect(userTexts(live)).toEqual(['list files for CHARLIE', 'list files for DELTA']); // keepRecentTurns: 2
+    const archived = env.rt.sessions.archivedMessages(s.id);
+    expect(archived.length + live.length - 1).toBe(before);
+    expect(userTexts(archived)).toEqual(['list files for ALPHA', 'list files for BRAVO']);
+    expect(env.rt.sessions.search('BRAVO').some((h) => h.sessionId === s.id)).toBe(true);
+    expect((await agent.run('list files again')).stopReason).toBe('end_turn');
+    // a second compaction appends to the archive
+    await agent.compact();
+    expect(userTexts(env.rt.sessions.archivedMessages(s.id))).toEqual(['list files for ALPHA', 'list files for BRAVO', 'list files for CHARLIE']);
+  });
+
+  it('clears old tool outputs from the context but not from the stored session', async () => {
+    writeFileSync(join(env.workspace, 'big.txt'), 'x'.repeat(5000));
+    const s = env.rt.createSession({ source: 'test' });
+    const agent = env.rt.agent(s.id);
+    for (let i = 0; i < 3; i++) await agent.run('read big.txt');
+    const resultsIn = (msgs: Message[]) => msgs.flatMap((m) => m.parts).filter((p) => p.type === 'tool_result') as { content: string; meta?: { cleared?: boolean } }[];
+    const r = internals(agent).clearOldToolResults(1);
+    expect(r.count).toBeGreaterThan(0);
+    const live = resultsIn(internals(agent).messages);
+    expect(live.at(-1)?.meta?.cleared).toBeUndefined();
+    expect(live.filter((p) => p.meta?.cleared)).toHaveLength(r.count);
+    expect(live.find((p) => p.meta?.cleared)?.content).toMatch(/Output cleared to save context/);
+    expect(resultsIn(env.rt.sessions.messages(s.id)).some((p) => p.meta?.cleared)).toBe(false);
+    // clearing twice does nothing more
+    expect(internals(agent).clearOldToolResults(1).count).toBe(0);
+    // a compaction that keeps those turns stores their original outputs, not the stubs
+    await agent.compact();
+    expect(resultsIn(env.rt.sessions.messages(s.id)).some((p) => p.meta?.cleared)).toBe(false);
+  });
+
+  it('trims instead of failing the task when the summary cannot be made', async () => {
+    const s = env.rt.createSession({ source: 'test' });
+    const agent = env.rt.agent(s.id);
+    for (let i = 0; i < 4; i++) await agent.run(`list files ${i}`);
+    inject('kronos', {
+      id: 'kronos',
+      async chat(): Promise<ChatResponse> {
+        throw new ProviderError('provider is down', 'kronos', 400, false);
+      },
+    } as Provider);
+    const notices: string[] = [];
+    const off = env.rt.events.on((e) => {
+      const ev = (e as { event?: { type: string; text?: string } }).event;
+      if (ev?.type === 'notice' && ev.text) notices.push(ev.text);
+    });
+    const model: ModelInfo = { ...env.rt.providers.resolve(), contextWindow: 200 };
+    await internals(agent).maybeCompact(model, 'r_test', new AbortController().signal);
+    off();
+    const live = env.rt.sessions.messages(s.id);
+    expect(messageText(live[0] as Message)).toMatch(/could not be made \(provider is down\)/);
+    expect(userTexts(live)).toEqual(['list files 2', 'list files 3']);
+    expect(env.rt.sessions.archivedMessages(s.id).length).toBeGreaterThan(0);
+    expect(notices.some((n) => /could not be summarized/.test(n))).toBe(true);
+  });
+
+  it('summarizes very long histories in bounded chunks', () => {
+    const agent = env.rt.agent(env.rt.createSession({ source: 'test' }).id);
+    const msgs: Message[] = Array.from({ length: 40 }, (_, i) => ({ id: `m${i}`, role: 'user', parts: [{ type: 'text', text: `${i} ${'y'.repeat(300)}` }], createdAt: i }));
+    const chunks: string[] = internals(agent).transcriptChunks(msgs, 1000);
+    expect(chunks).toHaveLength(8); // first chunk + the 7 most recent
+    expect(chunks[0]).toMatch(/^USER: 0 /);
+    expect(chunks.at(-1)).toMatch(/USER: 39 /);
+    expect(chunks.every((c) => c.length <= 1000)).toBe(true);
+  });
+});
+
+describe('syntax check after edits', () => {
+  it('finds parse errors in the common file types', async () => {
+    const ws = env.workspace;
+    expect(await syntaxProblems(join(ws, 'a.ts'), 'const x: number = 1;\n', ws)).toEqual([]);
+    const ts = await syntaxProblems(join(ws, 'a.ts'), 'function f() {\n  return {;\n}\n', ws);
+    expect(ts[0]).toMatchObject({ line: 2 });
+    expect((await syntaxProblems(join(ws, 'a.tsx'), 'const a = <div>{1}</div>;\n', ws))).toEqual([]);
+    expect((await syntaxProblems(join(ws, 'a.json'), '{"a": 1,}', ws))[0]?.line).toBe(1);
+    expect(await syntaxProblems(join(ws, 'tsconfig.json'), '{ // comments are fine here\n}', ws)).toEqual([]);
+    expect((await syntaxProblems(join(ws, 'a.yaml'), 'a: [1, 2\nb: 3\n', ws)).length).toBeGreaterThan(0);
+    expect(await syntaxProblems(join(ws, 'a.md'), '{{{', ws)).toEqual([]);
+  });
+
+  it('reports a broken edit in the tool result itself', async () => {
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(): Promise<ChatResponse> {
+        step++;
+        if (step === 1) {
+          const call: ToolCallPart = { type: 'tool_call', id: 'call_1', name: 'write_file', input: { path: 'bad.ts', content: 'export function f() {\n  return [1, 2;\n}\n' } };
+          return { parts: [call], stopReason: 'tool_use', usage, model: 'scripted' };
+        }
+        return { parts: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    await env.rt.agent(s.id).run('write bad.ts');
+    const result = env.rt.sessions
+      .messages(s.id)
+      .flatMap((m) => m.parts)
+      .find((p) => p.type === 'tool_result') as { content: string; meta?: { syntaxErrors?: number } };
+    expect(result.content).toMatch(/Syntax check failed/);
+    expect(result.content).toMatch(/bad\.ts:2:\d+/);
+    expect(result.meta?.syntaxErrors).toBeGreaterThan(0);
+  });
+});

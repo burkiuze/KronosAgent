@@ -70,6 +70,9 @@ function normalize(c: KronosConfig): void {
   if (!Array.isArray(c.model.fallbacks)) c.model.fallbacks = [];
   if (!Array.isArray(c.customProviders)) c.customProviders = [];
   c.agent.compaction.threshold = Math.min(0.95, Math.max(0.3, Number(c.agent.compaction.threshold) || 0.8));
+  c.agent.compaction.keepRecentTurns = Math.max(0, Math.min(10, Math.round(Number(c.agent.compaction.keepRecentTurns ?? 2))));
+  c.agent.compaction.keepToolResults = Math.max(1, Math.round(Number(c.agent.compaction.keepToolResults) || 8));
+  c.agent.compaction.clearToolResults = c.agent.compaction.clearToolResults !== false;
   c.agent.maxIterations = Math.max(1, Number(c.agent.maxIterations) || 120);
 }
 

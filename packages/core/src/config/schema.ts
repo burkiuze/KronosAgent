@@ -81,11 +81,18 @@ export interface KronosConfig {
     instructions: string;
     personality: string;
     language: string;
-    compaction: { enabled: boolean; threshold: number; keepRecentTurns: number };
+    /**
+     * threshold: share of the context window that triggers it. First the bodies of tool outputs older
+     * than the `keepToolResults` most recent are cleared; if that is not enough, everything before the
+     * last `keepRecentTurns` user turns is summarized (and archived, still readable and searchable).
+     */
+    compaction: { enabled: boolean; threshold: number; keepRecentTurns: number; clearToolResults: boolean; keepToolResults: number };
     subagents: { maxConcurrent: number; maxDepth: number; maxIterations: number };
     nudges: { memoryEvery: number; skillAfterToolCalls: number };
     /** when a run edited files but never ran verify afterwards, ask for verification once before finishing */
     verifyBeforeFinish: boolean;
+    /** parse files right after write/edit/patch and report syntax errors in the same tool result */
+    editDiagnostics: boolean;
     /** per-run limits (0 = unlimited); a run that reaches one stops cleanly and can be continued */
     budget: { maxTokens: number; maxCostUsd: number; maxMinutes: number };
   };
@@ -230,10 +237,11 @@ export function defaultConfig(): KronosConfig {
       instructions: '',
       personality: 'default',
       language: 'auto',
-      compaction: { enabled: true, threshold: 0.8, keepRecentTurns: 2 },
+      compaction: { enabled: true, threshold: 0.8, keepRecentTurns: 2, clearToolResults: true, keepToolResults: 8 },
       subagents: { maxConcurrent: 4, maxDepth: 2, maxIterations: 60 },
       nudges: { memoryEvery: 12, skillAfterToolCalls: 18 },
       verifyBeforeFinish: true,
+      editDiagnostics: true,
       budget: { maxTokens: 0, maxCostUsd: 0, maxMinutes: 0 },
     },
     toolsets: { enabled: [...ALL_TOOLSETS], disabled: [] },

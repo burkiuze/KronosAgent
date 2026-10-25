@@ -172,6 +172,8 @@ export interface ToolResultMeta {
   fullOutputPath?: string;
   todos?: Todo[];
   url?: string;
+  /** the body was dropped from the model context to save room (the stored session keeps it) */
+  cleared?: boolean;
   [key: string]: unknown;
 }
 

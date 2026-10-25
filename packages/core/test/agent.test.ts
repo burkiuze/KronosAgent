@@ -185,8 +185,8 @@ describe('agent loop (demo model)', () => {
     const r = await agent.compact();
     expect(r.after).toBeLessThan(r.before);
     const msgs = env.rt.sessions.messages(session.id);
-    expect(msgs).toHaveLength(1);
     expect(msgs[0]!.meta?.kind).toBe('summary');
+    expect(env.rt.sessions.archivedMessages(session.id).length).toBeGreaterThan(0);
     const next = await agent.run('list files again');
     expect(next.stopReason).toBe('end_turn');
   });

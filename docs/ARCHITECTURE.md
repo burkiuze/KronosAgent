@@ -83,8 +83,22 @@ Key properties:
   `tool_call`, `tool_progress`, `tool_result`, `permission_request` / `permission_resolved`,
   `clarify_request` / `clarify_resolved`, `message`, `usage`, `compaction`, `todos`, `subagent`,
   `artifact`, `notice`, `title`, `run_end`.
-- **Compaction** when the context window passes `agent.compaction.threshold`: older turns are
-  summarised by the summary model; the last `keepRecentTurns` stay verbatim.
+- **Context management** when the context passes `agent.compaction.threshold`, in three tiers:
+  1. *Clear old tool outputs* — the bodies of tool results older than the `keepToolResults` most
+     recent become a one-line stub (calls, order and errors stay). Cheap, no model call; the stored
+     session keeps the full output. Often enough on its own in tool-heavy runs.
+  2. *Summarise* — everything before the last `keepRecentTurns` user turns is summarised by the
+     summary model (fewer turns are kept when they alone would fill the window). Long histories
+     are summarised in ~100k-character chunks that fold into a running summary. The replaced
+     messages move to the session **archive**: still searchable (`session_search`) and shown in
+     the app under "Show earlier messages".
+  3. *Trim* — if the summary call fails, the recent turns are kept and the rest is archived with
+     a note, so the user's task continues instead of failing.
+- **Syntax check after edits** (`agent.editDiagnostics`): files written by `write_file`,
+  `edit_file`, `multi_edit` or `apply_patch` are parsed at once (TS/JS via the workspace's or
+  Kronos's TypeScript parser, else `node --check`; JSON, YAML, Python `ast`), and parse errors with
+  the offending lines are appended to that tool result — the agent fixes them while the change is
+  still in view instead of meeting them later as a confusing build or test failure.
 - **Interrupts** keep history valid: pending tool calls receive synthetic "interrupted" results.
 - **Checkpoints**: files are snapshotted before the first write in a turn → `undo` restores
   them and truncates history; `retry` re-runs the last prompt.
@@ -325,7 +339,8 @@ rows), so a crash or restart loses at most the turn in flight; agents are rebuil
 | Tool error | Returned to the model as a result; the watchdog steps in if it repeats |
 | Agent stuck in a loop | Note after 3 identical failures, stop (`stalled`) after 6 |
 | Run too long / too costly | `agent.budget` stops it cleanly (`budget`) |
-| Context window filling up | Compaction at `agent.compaction.threshold` |
+| Context window filling up | Clear old tool outputs → summarise older turns (archived) → trim if the summary fails |
+| Edit breaks a file's syntax | Parse error and offending line reported in the same tool result |
 | User interrupt | Pending tool calls get synthetic "interrupted" results; history stays valid |
 | Bad edit | Checkpoints → `undo` restores files and truncates history |
 | Process restart / crash | Sessions, messages, todos, allow-rules and Codemaster state are on disk; agents rebuild |

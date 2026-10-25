@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Download, GitFork, Minimize2, Pencil, RefreshCw, RotateCcw, Trash2, Undo2, CircleCheck, Circle, LoaderCircle } from 'lucide-react';
 import { chatOf, deleteSession, loadSession, openSession, refreshSessions, renameSession, sendMessage, setState, toast, undoLast, useStore } from '../lib/store';
-import { downloadUrl, post } from '../lib/api';
+import { downloadUrl, get, post } from '../lib/api';
 import { t } from '../lib/i18n';
 import { shortDuration, tokens as fmtTokens } from '../lib/format';
 import type { Message, Part } from '../lib/types';
@@ -34,6 +34,48 @@ function buildItems(messages: Message[]): { items: Item[]; results: Map<string, 
     }
   }
   return { items, results };
+}
+
+/** The messages compaction moved out of the live history, loaded on demand (read-only). */
+function EarlierMessages({ sessionId }: { sessionId: string }) {
+  const [messages, setMessages] = useState<Message[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => setMessages(null), [sessionId]);
+  if (!messages)
+    return (
+      <div className="earlier-toggle">
+        <button
+          className="btn small"
+          disabled={loading}
+          onClick={async () => {
+            setLoading(true);
+            try {
+              setMessages(await get<Message[]>(`/api/sessions/${sessionId}/archive`));
+            } catch (e) {
+              toast((e as Error).message, 'error');
+            } finally {
+              setLoading(false);
+            }
+          }}
+        >
+          {loading ? t('chat.loadingEarlier') : t('chat.showEarlier')}
+        </button>
+      </div>
+    );
+  const { items, results } = buildItems(messages);
+  return (
+    <div className="earlier">
+      {items.map((it) =>
+        it.kind === 'user' ? (
+          <UserMessage key={it.m.id} message={it.m} />
+        ) : it.kind === 'assistant' ? (
+          <AssistantTurn key={it.ms[0]?.id} messages={it.ms} results={results} tools={{}} running={false} sessionId={sessionId} />
+        ) : it.kind === 'summary' ? (
+          <div key={it.m.id} className="summary-divider">— {t('chat.compacted')} —</div>
+        ) : null,
+      )}
+    </div>
+  );
 }
 
 function Welcome() {
@@ -278,10 +320,13 @@ export function ChatView() {
                 if (it.kind === 'user') return <UserMessage key={it.m.id} message={it.m} />;
                 if (it.kind === 'summary')
                   return (
-                    <details key={it.m.id} className="summary-divider">
-                      <summary>— {t('chat.compacted')} —</summary>
-                      <Markdown text={it.m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('').replace(/<\/?[a-z_]+>/g, '')} />
-                    </details>
+                    <div key={it.m.id}>
+                      {i === 0 && it.m.meta?.archived ? <EarlierMessages sessionId={currentId} /> : null}
+                      <details className="summary-divider">
+                        <summary>— {t('chat.compacted')} —</summary>
+                        <Markdown text={it.m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('').replace(/<\/?[a-z_]+>/g, '')} />
+                      </details>
+                    </div>
                   );
                 if (it.kind === 'notice')
                   return (

@@ -84,6 +84,9 @@ export interface SessionStore {
   messages(id: string): Message[];
   truncate(id: string, keep: number): Message[];
   replaceMessages(id: string, messages: Message[]): void;
+  /** Keep messages that left the live history (e.g. compacted away) so they can still be read and searched. */
+  archiveMessages(id: string, messages: Message[]): void;
+  archivedMessages(id: string): Message[];
   search(query: string, opts?: { limit?: number; excludeSession?: string }): SearchHit[];
   logUsage(e: UsageEntry): void;
   usageSummary(opts: { since?: number; groupBy: 'day' | 'model' | 'session' | 'source' }): UsageSummaryRow[];
@@ -178,6 +181,10 @@ class SqliteSessionStore implements SessionStore {
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT, data TEXT, created_at INTEGER, text TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+      CREATE TABLE IF NOT EXISTS archived_messages (
+        session_id TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_archived_session ON archived_messages(session_id, seq);
       CREATE TABLE IF NOT EXISTS usage_log (
         ts INTEGER, session_id TEXT, model TEXT, source TEXT, input INTEGER, output INTEGER, cache_read INTEGER,
         cache_write INTEGER, cost REAL, tool_calls INTEGER DEFAULT 0
@@ -278,6 +285,7 @@ class SqliteSessionStore implements SessionStore {
   delete(id: string): void {
     for (const child of this.db.prepare('SELECT id FROM sessions WHERE parent_id = ?').all(id) as { id: string }[]) this.delete(child.id);
     this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
+    this.db.prepare('DELETE FROM archived_messages WHERE session_id = ?').run(id);
     if (this.fts) this.db.prepare('DELETE FROM messages_fts WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
   }
@@ -320,9 +328,34 @@ class SqliteSessionStore implements SessionStore {
   }
 
   replaceMessages(id: string, messages: Message[]): void {
+    // archived messages keep their search entries
+    if (this.fts) this.db.prepare('DELETE FROM messages_fts WHERE message_id IN (SELECT id FROM messages WHERE session_id = ?)').run(id);
     this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
-    if (this.fts) this.db.prepare('DELETE FROM messages_fts WHERE session_id = ?').run(id);
     this.appendMessages(id, messages);
+  }
+
+  archiveMessages(id: string, messages: Message[]): void {
+    if (!messages.length) return;
+    const max = this.db.prepare('SELECT COALESCE(MAX(seq), -1) AS m FROM archived_messages WHERE session_id = ?').get(id) as { m: number };
+    let seq = Number(max.m) + 1;
+    const ins = this.db.prepare('INSERT INTO archived_messages (session_id, seq, data) VALUES (?,?,?)');
+    const insFts = this.fts ? this.db.prepare('INSERT INTO messages_fts (text, message_id, session_id) VALUES (?,?,?)') : null;
+    this.db.exec('BEGIN');
+    try {
+      for (const m of messages) {
+        ins.run(id, seq++, JSON.stringify(m));
+        const text = messagePlainText(m);
+        if (insFts && text.trim() && m.role !== 'system' && m.meta?.kind !== 'summary') insFts.run(text, m.id, id);
+      }
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  archivedMessages(id: string): Message[] {
+    return (this.db.prepare('SELECT data FROM archived_messages WHERE session_id = ? ORDER BY seq').all(id) as { data: string }[]).map((r) => JSON.parse(r.data) as Message);
   }
 
   search(query: string, opts: { limit?: number; excludeSession?: string } = {}): SearchHit[] {
@@ -448,6 +481,9 @@ class JsonSessionStore implements SessionStore {
   private msgFile(id: string) {
     return join(this.dir, `${id}.jsonl`);
   }
+  private archiveFile(id: string) {
+    return join(this.dir, `${id}.archive.jsonl`);
+  }
   private saveMeta(s: SessionRecord) {
     const f = this.metaFile(s.id);
     writeFileSync(`${f}.tmp`, JSON.stringify(s));
@@ -485,6 +521,7 @@ class JsonSessionStore implements SessionStore {
     this.index.delete(id);
     rmSync(this.metaFile(id), { force: true });
     rmSync(this.msgFile(id), { force: true });
+    rmSync(this.archiveFile(id), { force: true });
   }
   appendMessages(id: string, messages: Message[]) {
     if (!messages.length) return;
@@ -509,11 +546,22 @@ class JsonSessionStore implements SessionStore {
     writeFileSync(this.msgFile(id), messages.map((m) => JSON.stringify(m)).join('\n') + (messages.length ? '\n' : ''));
     this.update(id, { messageCount: messages.length });
   }
+  archiveMessages(id: string, messages: Message[]) {
+    if (messages.length) appendFileSync(this.archiveFile(id), messages.map((m) => JSON.stringify(m)).join('\n') + '\n');
+  }
+  archivedMessages(id: string): Message[] {
+    const f = this.archiveFile(id);
+    if (!existsSync(f)) return [];
+    return readFileSync(f, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Message);
+  }
   search(query: string, opts: { limit?: number; excludeSession?: string } = {}): SearchHit[] {
     const docs: { id: string; text: string; data: { s: SessionRecord; m: Message; text: string } }[] = [];
     for (const s of this.index.values()) {
       if (s.id === opts.excludeSession) continue;
-      for (const m of this.messages(s.id)) {
+      for (const m of [...this.archivedMessages(s.id), ...this.messages(s.id)]) {
         if (m.role === 'system') continue;
         const text = messagePlainText(m);
         if (text.trim()) docs.push({ id: m.id, text, data: { s, m, text } });

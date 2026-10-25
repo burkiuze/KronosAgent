@@ -954,6 +954,20 @@ kbd {
   color: var(--danger);
 }
 
+.earlier-toggle {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.earlier {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  opacity: 0.82;
+  margin-bottom: 8px;
+}
+
 .summary-divider {
   font-size: 0.82em;
   color: var(--faint);

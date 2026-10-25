@@ -39,6 +39,8 @@ const en: Dict = {
   'chat.answer': 'Your answer…',
   'chat.send': 'Send',
   'chat.compacted': 'Conversation compacted',
+  'chat.showEarlier': 'Show earlier messages',
+  'chat.loadingEarlier': 'Loading…',
   'chat.plan': 'Plan',
   'status.gateway': 'Gateway',
   'status.ready': 'ready',

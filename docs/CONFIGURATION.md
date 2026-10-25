@@ -65,9 +65,10 @@ Then use `vllm:qwen3-coder-480b` anywhere a model is accepted.
 | `agent.parallelTools` | `true` | Run parallel-safe tool calls concurrently. |
 | `agent.autoTitle` | `true` | Title new sessions automatically. |
 | `agent.toolOutputLimit` | `40000` | Characters of tool output kept in context. |
-| `agent.compaction` | `{enabled: true, threshold: 0.8, keepRecentTurns: 2}` | Summarise older turns past this fraction of the context window. |
+| `agent.compaction` | `{enabled: true, threshold: 0.8, keepRecentTurns: 2, clearToolResults: true, keepToolResults: 8}` | Past `threshold` of the context window: first clear the bodies of tool outputs older than the last `keepToolResults`; if that is not enough, summarise everything before the last `keepRecentTurns` user turns. Replaced messages are archived (searchable, visible under "Show earlier messages"). |
 | `agent.subagents` | `{maxConcurrent: 4, maxDepth: 2, maxIterations: 60}` | Delegation limits. |
 | `agent.nudges` | `{memoryEvery: 12, skillAfterToolCalls: 18}` | When to remind the agent to save memories / capture a skill. |
+| `agent.editDiagnostics` | `true` | Parse files right after write/edit/patch (TS/JS, JSON, YAML, Python) and report syntax errors in the same tool result. |
 | `agent.verifyBeforeFinish` | `true` | If a run changed files and never ran `verify` afterwards (and the project has checks), ask for one verification turn before finishing. |
 | `agent.budget` | `{maxTokens: 0, maxCostUsd: 0, maxMinutes: 0}` | Per-run limits (0 = none). A run that reaches one stops cleanly (`stopReason: budget`) and can be continued. |
 

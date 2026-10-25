@@ -193,6 +193,12 @@ export function buildApi(gw: Gateway): Router {
     const s = k.createSession({ source: 'desktop', title: b.title, cwd: b.cwd ? resolvePath(b.cwd, k.cwd) : undefined, model: b.model ? k.providers.resolve(b.model).ref : '', mode: b.mode });
     return sessionSummary(s);
   });
+  /** Messages that compaction moved out of the live history (oldest first). */
+  r.get('/api/sessions/:id/archive', (req) => {
+    const k = rt();
+    if (!k.sessions.get(req.params.id as string)) throw new HttpError(404, 'session not found');
+    return k.sessions.archivedMessages(req.params.id as string);
+  });
   r.get('/api/sessions/:id', (req) => {
     const k = rt();
     const s = k.sessions.get(req.params.id as string);
