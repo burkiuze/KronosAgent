@@ -1,6 +1,7 @@
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
+import { t } from './i18n';
 
 const marked = new Marked({
   gfm: true,
@@ -15,7 +16,7 @@ const marked = new Marked({
         html = text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string);
       }
       const label = language || 'text';
-      return `<div class="code-block"><div class="code-head"><span>${label}</span><button class="code-copy" data-copy>Copy</button></div><pre><code class="hljs language-${label}">${html}</code></pre></div>`;
+      return `<div class="code-block"><div class="code-head"><span>${label}</span><button class="code-copy" data-copy>${t('common.copy')}</button></div><pre><code class="hljs language-${label}">${html}</code></pre></div>`;
     },
     link({ href, title, text }) {
       const t = title ? ` title="${title}"` : '';
@@ -46,7 +47,7 @@ export function installCopyHandler(): void {
     const code = btn.closest('.code-block')?.querySelector('code')?.textContent ?? '';
     void navigator.clipboard?.writeText(code).then(() => {
       btn.textContent = '✓';
-      setTimeout(() => (btn.textContent = 'Copy'), 1200);
+      setTimeout(() => (btn.textContent = t('common.copy')), 1200);
     });
   });
 }

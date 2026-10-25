@@ -133,7 +133,7 @@ function SessionItem({ s, active, running, needsInput }: { s: Session; active: b
                   close();
                   await patch(`/api/sessions/${s.id}`, { archived: true });
                   refreshSessions();
-                  toast('Archived');
+                  toast(t('nav.archived'));
                 }}
               >
                 Archive
@@ -275,7 +275,7 @@ export function Sidebar() {
               }
             }}
           >
-            <Archive size={12} /> Archived
+            <Archive size={12} /> {t('nav.archived')}
           </button>
         )}
       </div>

@@ -15,12 +15,8 @@ interface Command {
   source: string;
 }
 
-const MODES: { id: PermissionMode; label: string; hint: string }[] = [
-  { id: 'ask', label: 'Ask', hint: 'Approve edits and commands' },
-  { id: 'auto-edit', label: 'Auto-edit', hint: 'Edits auto-approved, commands ask' },
-  { id: 'yolo', label: 'YOLO', hint: 'Everything auto-approved (dangerous still asks)' },
-  { id: 'plan', label: 'Plan', hint: 'Read-only until you approve a plan' },
-];
+const MODE_IDS: PermissionMode[] = ['ask', 'auto-edit', 'yolo', 'plan'];
+const modeLabel = (m: PermissionMode) => ({ id: m, label: t(`mode.${m}`), hint: t(`mode.${m}.hint`) });
 
 const TEXT_EXT = /\.(txt|md|markdown|json|ya?ml|toml|ini|csv|tsv|log|xml|html?|css|scss|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|h|cpp|cs|php|sh|bash|zsh|sql|lua|r|dart|vue|svelte|env|conf|cfg)$/i;
 
@@ -181,7 +177,7 @@ export function Composer({ centered }: { centered?: boolean }) {
 
   const sendOnEnter = config?.ui?.sendOnEnter !== false;
   const placeholder = currentId ? t('chat.followup') : t('chat.placeholder');
-  const modeInfo = MODES.find((m) => m.id === mode);
+  const modeInfo = MODE_IDS.includes(mode) ? modeLabel(mode) : undefined;
 
   return (
     <div
@@ -317,7 +313,7 @@ export function Composer({ centered }: { centered?: boolean }) {
           >
             {(close) => (
               <>
-                {MODES.map((m) => (
+                {MODE_IDS.map(modeLabel).map((m) => (
                   <MenuItem
                     key={m.id}
                     onClick={() => {
@@ -337,9 +333,9 @@ export function Composer({ centered }: { centered?: boolean }) {
               {(session?.model || getState().draftModel || status?.model?.ref || '').split(':').slice(1).join(':') || 'model'} <ChevronDown size={11} />
             </span>
           </ModelPicker>
-          {chat.context && <span className="chip ghost">{chat.context.percent}% context</span>}
+          {chat.context && <span className="chip ghost">{chat.context.percent}% {t('composer.context')}</span>}
           <div className="flex-1" />
-          <span className="composer-hint">{running ? 'Enter queues a follow-up · Esc stops' : '⏎ send · ⇧⏎ newline · / skills · @ files'}</span>
+          <span className="composer-hint">{running ? t('composer.hintRunning') : t('composer.hint')}</span>
         </div>
       </div>
     </div>
