@@ -47,7 +47,7 @@ ${c.bold('Manage')}
   kronos cron [list|add|remove|run|pause|resume]            kronos memory [show|add|search|clear]
   kronos mcp [list|add|remove|serve]                        kronos pairing [list|approve <code>]
   kronos import <hermes|openclaw|claude|codex|cursor>       kronos insights [--days N]
-  kronos doctor · kronos version · kronos update
+  kronos doctor · kronos version · kronos update [--check]
 
 ${c.bold('Options')}
   -m, --model <ref>     model (e.g. sonnet, anthropic:claude-opus-5-5, ollama:qwen3-coder:30b)
@@ -154,7 +154,7 @@ export async function main(argv: string[]): Promise<void> {
     case 'usage':
       return withRt(args, (rt) => cmdInsights(rt, args));
     case 'update':
-      return cmdUpdate();
+      return cmdUpdate(args);
     case 'chat':
     case undefined:
       return cmdInteractive(args, pos.join(' '));
@@ -245,11 +245,13 @@ async function cmdGateway(args: ParsedArgs, openUi: boolean): Promise<void> {
     token: flagStr(args, 'token'),
     platforms: args.flags.platforms !== false,
   });
-  const url = `${gw.url}${gw.token ? `/?token=${encodeURIComponent(gw.token)}` : '/'}`;
+  // a wildcard bind isn't a browsable address — show localhost instead
+  const base = gw.url.replace(/\/\/(0\.0\.0\.0|\[::\])(?=:)/, '//localhost');
+  const url = `${base}${gw.token ? `/?token=${encodeURIComponent(gw.token)}` : '/'}`;
   console.log(`\n${logo()}\n`);
   console.log(`  ${c.bold('Gateway')}      ${c.cyan(url)}`);
   console.log(`  ${c.bold('Profile')}      ${rt.profile}   ${c.bold('Model')} ${rt.providers.resolve().ref}`);
-  if (rt.config.gateway.openaiApi) console.log(`  ${c.bold('OpenAI API')}   ${gw.url}/v1  ${c.gray('(model: kronos)')}`);
+  if (rt.config.gateway.openaiApi) console.log(`  ${c.bold('OpenAI API')}   ${base}/v1  ${c.gray('(model: kronos)')}`);
   const plats = gw.platforms.statuses().filter((p) => p.enabled);
   console.log(`  ${c.bold('Messaging')}    ${plats.length ? plats.map((p) => `${p.label}: ${p.state === 'running' ? c.green(p.state) : c.yellow(p.state)}`).join(', ') : c.gray('none enabled (Settings → Gateway)')}`);
   console.log(`  ${c.bold('Automations')}  ${rt.cron.list().filter((j) => j.enabled).length} active`);
@@ -608,14 +610,31 @@ async function cmdInsights(rt: Kronos, args: ParsedArgs): Promise<void> {
   console.log();
 }
 
-async function cmdUpdate(): Promise<void> {
+async function cmdUpdate(args: ParsedArgs): Promise<void> {
+  let latest: string | undefined;
   try {
     const res = await fetch('https://api.github.com/repos/burkiuze/KronosAgent/releases/latest', { signal: AbortSignal.timeout(8000) });
-    const j = (await res.json()) as { tag_name?: string };
-    const latest = j.tag_name?.replace(/^v/, '');
-    if (latest && latest !== KRONOS_VERSION) console.log(`Update available: ${KRONOS_VERSION} → ${c.bold(latest)}\n  npm i -g kronos-agent@latest   (or git pull && npm run build)`);
-    else console.log(`${c.green(sym.ok)} You are on the latest version (${KRONOS_VERSION}).`);
+    latest = ((await res.json()) as { tag_name?: string }).tag_name?.replace(/^v/, '');
   } catch {
-    console.log(c.gray('Could not check for updates. Update with: git pull && npm install && npm run build'));
+    /* offline — a git checkout can still pull */
   }
+  if (latest && latest !== KRONOS_VERSION) console.log(`Update available: ${KRONOS_VERSION} → ${c.bold(latest)}`);
+  // installs from scripts/install.sh (and source checkouts) are git clones: update in place
+  const repo = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..');
+  if (!existsSync(join(repo, '.git'))) {
+    console.log(latest && latest !== KRONOS_VERSION ? '  Re-run the installer or download the new desktop app.' : `${c.green(sym.ok)} You are on the latest version (${KRONOS_VERSION}).`);
+    return;
+  }
+  if (args.flags.check) return void console.log(c.gray(`  source checkout: ${repo} — run \`kronos update\` to pull and rebuild`));
+  const steps: [string, string[]][] = [
+    ['git', ['pull', '--ff-only']],
+    ['npm', ['install', '--no-audit', '--no-fund']],
+    ['npm', ['run', 'build']],
+  ];
+  for (const [cmd, argv] of steps) {
+    console.log(c.gray(`$ ${cmd} ${argv.join(' ')}`));
+    const code = await new Promise<number>((done) => spawn(cmd, argv, { cwd: repo, stdio: 'inherit', shell: process.platform === 'win32' }).on('close', (n) => done(n ?? 1)));
+    if (code !== 0) throw new Error(`${cmd} ${argv.join(' ')} failed (exit ${code})`);
+  }
+  console.log(`${c.green(sym.ok)} Kronos updated — restart running gateways/desktop to pick it up.`);
 }

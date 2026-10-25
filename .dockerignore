@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+apps/desktop/web
+apps/desktop/skills
+apps/desktop/build
+apps/desktop/release
+.git
+.env
+.env.*
+*.log
+coverage

@@ -1,0 +1,16 @@
+# Run Kronos 24/7: `docker compose up -d`, then open http://localhost:7777/?token=<KRONOS_GATEWAY_TOKEN>
+services:
+  kronos:
+    build: .
+    image: kronos-agent:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7777:7777"
+    env_file: .env
+    environment:
+      KRONOS_GATEWAY_TOKEN: ${KRONOS_GATEWAY_TOKEN:?set KRONOS_GATEWAY_TOKEN in .env}
+    volumes:
+      - kronos-data:/data          # config, memory, skills, sessions
+      - ./workspace:/workspace     # files the agent works on
+volumes:
+  kronos-data:

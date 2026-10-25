@@ -31,7 +31,7 @@ mcp:
       url: https://example.com/mcp
       headers: { Authorization: "Bearer ${DOCS_TOKEN}" }
       enabled: true
-      tools: { exclude: [delete_page] }   # optionally hide risky tools
+      exclude: [delete_page]     # optionally hide risky tools (glob patterns)
 ```
 
 Secrets go in `~/.kronos/.env` (Settings → API Keys) and are referenced as `${VAR}`; never
@@ -40,7 +40,7 @@ paste tokens into chat history or config files that might be shared.
 ## Choose servers
 
 Prefer official/vendor servers, then well-maintained community ones. Check what tools it
-exposes and whether they can write/delete; restrict with `tools.include/exclude` and keep the
+exposes and whether they can write/delete; restrict with `include`/`exclude` and keep the
 permission mode on `ask` for destructive tools.
 
 ## Troubleshoot
