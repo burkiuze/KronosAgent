@@ -140,7 +140,7 @@ Based on public docs as of Oct 2026; corrections welcome.
 | Voice in/out, image generation | ✅ | ✅ | ✅ | — | — | — | — | — | ◐ | ◐ |
 | Profiles (isolated personas) | ✅ | ✅ | ◐ | — | ◐ | — | — | — | — | — |
 | Import from other agents | ✅ | ✅ | — | — | — | — | — | — | — | — |
-| Works fully offline (demo / local model) | ✅ | ◐ | ◐ | — | — | — | ◐ | ◐ | ◐ | ◐ |
+| Works fully offline (local model) | ✅ | ◐ | ◐ | — | — | — | ◐ | ◐ | ◐ | ◐ |
 
 ## Design principles we derived
 
@@ -157,8 +157,9 @@ Based on public docs as of Oct 2026; corrections welcome.
 5. **Any model.** Provider-specific power (Anthropic prompt caching, adaptive thinking, effort,
    server-side fallbacks) where available, a portable OpenAI-compatible path everywhere else,
    and a fallback chain across providers.
-6. **Works before it's configured.** The offline demo model means install → open → explore,
-   then add a key.
+6. **Honest first run.** A fresh install opens onto a "connect a provider" prompt with a
+   button straight to the provider settings; nothing answers with a stand-in model. The offline
+   demo model exists for tests and only runs when chosen explicitly.
 
 ## Gaps and roadmap
 

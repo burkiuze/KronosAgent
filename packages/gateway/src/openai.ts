@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import type { AgentEvent, Kronos, Message } from '@kronos/core';
-import { newId, catalogModels } from '@kronos/core';
+import { newId, catalogModels, NotConnectedError } from '@kronos/core';
 import { HttpError, Router } from './http.js';
 import type { Gateway } from './server.js';
 
@@ -71,6 +71,8 @@ export function buildOpenAIRoutes(gw: Gateway): Router {
       if (earlier.length) prompt = `<conversation_so_far>\n${earlier.map((m) => `${m.role.toUpperCase()}: ${contentText(m.content)}`).join('\n\n')}\n</conversation_so_far>\n\n${prompt}`;
     }
     if (system) prompt = `<client_instructions>\n${system}\n</client_instructions>\n\n${prompt}`;
+    const ready = k.providers.readiness(modelRef);
+    if (!ready.ok) throw new NotConnectedError(ready.provider);
     const id = `chatcmpl-${newId()}`;
     const created = Math.floor(Date.now() / 1000);
     const model = body.model ?? 'kronos';

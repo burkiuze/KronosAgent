@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Download, GitFork, KeyRound, Minimize2, Pencil, RefreshCw, RotateCcw, Trash2, Undo2, CircleCheck, Circle, LoaderCircle } from 'lucide-react';
+import { ChevronDown, Download, GitFork, Minimize2, Pencil, RefreshCw, RotateCcw, Trash2, Undo2, CircleCheck, Circle, LoaderCircle } from 'lucide-react';
 import { chatOf, deleteSession, loadSession, openSession, refreshSessions, renameSession, sendMessage, setState, toast, undoLast, useStore } from '../lib/store';
 import { downloadUrl, post } from '../lib/api';
 import { t } from '../lib/i18n';
@@ -8,6 +8,7 @@ import type { Message, Part } from '../lib/types';
 import { AssistantTurn, Markdown, StreamingMarkdown, ThinkingBlock, TodoList, ToolCard, UserMessage } from './Message';
 import { ClarifyCard, PermissionCard, SubagentPanel } from './Cards';
 import { Composer } from './Composer';
+import { ConnectCard } from './ConnectCard';
 import { Menu, MenuItem } from './ui';
 
 type Item =
@@ -36,18 +37,12 @@ function buildItems(messages: Message[]): { items: Item[]; results: Map<string, 
 }
 
 function Welcome() {
-  const demo = useStore((s) => Boolean(s.status?.demo));
+  const needsProvider = useStore((s) => Boolean(s.status?.needsProvider));
   return (
     <div className="welcome">
       <h1 className="welcome-title">KRONOS AGENT</h1>
       <Composer centered />
-      {demo && (
-        <button className="welcome-demo" onClick={() => setState({ settings: 'keys' })}>
-          <KeyRound size={13} />
-          <span>{t('chat.demo')}</span>
-          <b>{t('chat.addKey')}</b>
-        </button>
-      )}
+      {needsProvider && <ConnectCard />}
     </div>
   );
 }
@@ -307,6 +302,9 @@ export function ChatView() {
                 );
               })}
               {chat.pendingUser && <UserMessage message={chat.pendingUser} pending />}
+              {!chat.running && !chat.pendingUser && items.at(-1)?.kind === 'user' && (items.at(-1) as { m: Message }).m.meta?.unanswered === 'no_provider' && (
+                <ConnectCard sessionId={currentId} />
+              )}
               {chat.running && <LiveTurn continued={lastIsAssistant} />}
               {subagents.length > 0 && chat.running && <SubagentPanel agents={subagents} />}
               {chat.notices.filter((n) => n.level !== 'info').slice(-2).map((n) => (

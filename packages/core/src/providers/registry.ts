@@ -178,6 +178,23 @@ export class ProviderRegistry {
     return 'kronos:demo';
   }
 
+  /** The offline demo model runs only when it was chosen on purpose (config default or an explicit ref). */
+  demoAllowed(ref?: string | null): boolean {
+    const named = (r?: string | null) => Boolean(r && /^(kronos:|demo$)/i.test(r.trim()));
+    return named(ref) || named(this.config.model.default);
+  }
+
+  /**
+   * Whether a model can be used right now: some provider must be connected (the demo model is
+   * never an automatic fallback), and the chosen model's provider must have its key.
+   */
+  readiness(ref?: string | null): { ok: true } | { ok: false; reason: 'no_provider' | 'missing_key'; provider?: string } {
+    const model = this.resolve(ref);
+    if (model.provider === 'kronos') return this.demoAllowed(ref) ? { ok: true } : { ok: false, reason: 'no_provider' };
+    if (!this.isConfigured(model.provider)) return { ok: false, reason: 'missing_key', provider: model.provider };
+    return { ok: true };
+  }
+
   smallModelRef(forRef: string): string {
     const { provider } = parseModelRef(forRef, this.knownProviderIds());
     const preset = provider ? getPreset(provider) : undefined;

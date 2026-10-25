@@ -122,14 +122,21 @@ Key properties:
 - `openai.ts` — fetch + SSE for every OpenAI-compatible API (OpenAI, OpenRouter, Gemini, Groq,
   DeepSeek, Mistral, xAI, NVIDIA, Nous, Together, Fireworks, Cerebras, Moonshot, Z.ai, Ollama,
   LM Studio, custom). Extracts inline `<tool_call>{…}</tool_call>` emitted by Hermes-style models.
-- `demo.ts` — deterministic offline model that exercises real tools (used for first-run and
-  for tests).
+- `demo.ts` — deterministic offline model that exercises real tools (tests and explicit
+  `--model demo` runs only — never a silent fallback).
 - `registry.ts` — `provider:model` references, aliases (`opus`, `sonnet`, `gpt`, `gemini`,
   `hermes`, `local`, …), `auto` selection by configured keys, retries with backoff for
   retryable errors and a fallback chain (`model.fallbacks`). A **circuit breaker** skips a
   provider for 60 s after 3 failed requests in a row (outages only, not rejected requests) when
   the chain has an alternative. When an attempt is retried or falls back after it already
   streamed output, a `restart` signal makes clients discard the partial text first.
+  `readiness()` is checked before any run. With no provider connected, an interactive chat keeps
+  the message (flagged `meta.unanswered: 'no_provider'`) and emits a `notice` with
+  `code: 'no_provider'`; the UI shows a "Connect a provider" card under it, and
+  `Agent.answerHeld()` (`POST /api/sessions/:id/answer`) answers it once a provider is connected.
+  Headless runs, REST `/api/chat` and `/v1/chat/completions` are refused with `NotConnectedError`
+  (HTTP 409) before a session is created. A chat pinned to the demo model moves to the
+  configured provider once one is connected.
 - `catalog.ts` — model metadata: context window, output limit, tool/vision support, pricing
   (for cost tracking).
 

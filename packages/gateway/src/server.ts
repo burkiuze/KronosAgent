@@ -261,6 +261,7 @@ export class Gateway {
       profile: this.rt.profile,
       model,
       demo: model.provider === 'kronos',
+      needsProvider: !this.rt.providers.readiness().ok,
       running: this.hub.runningList(),
       pending: this.hub.pending(),
     });
@@ -276,7 +277,9 @@ export class Gateway {
       } catch {
         return;
       }
-      void this.onClientMessage(client, msg).catch((e) => client.send({ type: 'error', message: errorMessage(e), requestId: msg.requestId }));
+      void this.onClientMessage(client, msg).catch((e) =>
+        client.send({ type: 'error', message: errorMessage(e), requestId: msg.requestId, code: (e as { code?: string }).code }),
+      );
     });
   }
 

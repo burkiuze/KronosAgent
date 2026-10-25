@@ -18,7 +18,7 @@ export { PROVIDERS, catalogModels, parseModelRef, costOf, getPreset, type Provid
 export { AnthropicProvider, toAnthropicMessages } from './providers/anthropic.js';
 export { OpenAICompatProvider, toOpenAIMessages, extractInlineToolCalls } from './providers/openai.js';
 export { DemoProvider } from './providers/demo.js';
-export { ProviderError, MissingCredentialsError } from './providers/errors.js';
+export { ProviderError, MissingCredentialsError, NotConnectedError } from './providers/errors.js';
 
 export { ToolRegistry, type ToolsetStatus } from './tools/registry.js';
 export { TOOLSETS, type ToolDefinition, type ToolContext, type ToolsetInfo } from './tools/types.js';

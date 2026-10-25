@@ -123,8 +123,9 @@ export class Router {
       const out = await found.route.handler(req, res);
       if (!res.writableEnded && !res.headersSent) sendJson(res, 200, out ?? { ok: true });
     } catch (e) {
-      const status = e instanceof HttpError ? e.status : 500;
-      if (!res.headersSent) sendJson(res, status, { error: (e as Error).message });
+      const code = (e as { code?: string }).code;
+      const status = e instanceof HttpError ? e.status : code === 'no_provider' ? 409 : 500;
+      if (!res.headersSent) sendJson(res, status, { error: (e as Error).message, ...(code ? { code } : {}) });
       else res.end();
     }
     return true;

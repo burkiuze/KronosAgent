@@ -131,7 +131,7 @@ export type AgentEvent =
   | { type: 'todos'; runId: string; todos: Todo[] }
   | { type: 'subagent'; runId: string; agentId: string; label: string; status: 'start' | 'running' | 'done' | 'error'; detail?: string }
   | { type: 'artifact'; runId: string; artifact: { id: string; kind: string; title: string; location: string } }
-  | { type: 'notice'; runId: string; level: 'info' | 'warn' | 'error'; text: string }
+  | { type: 'notice'; runId: string; level: 'info' | 'warn' | 'error'; text: string; code?: string }
   | { type: 'title'; runId: string; sessionId: string; title: string }
   | { type: 'run_end'; runId: string; stopReason: string; text: string; usage: Usage; durationMs: number; error?: string };
 
@@ -151,6 +151,8 @@ export interface Status {
   cwd: string;
   model: ModelInfo;
   demo: boolean;
+  /** no usable model is connected: ask the user to connect a provider instead of chatting */
+  needsProvider?: boolean;
   agentName: string;
   running: RunningInfo[];
   pending: { permissions: PermissionRequest[]; clarify: ClarifyRequest[] };

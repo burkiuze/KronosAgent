@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CircleCheck, CircleX, ExternalLink, LoaderCircle, Plug, Plus, Trash2, Unplug } from 'lucide-react';
 import { get, post, put } from '../lib/api';
-import { toast } from '../lib/store';
+import { refreshStatus, toast } from '../lib/store';
 import { loadConfig, updateConfig, useConfig } from '../lib/config';
 import { t } from '../lib/i18n';
 import type { ModelInfo } from '../lib/types';
@@ -126,6 +126,7 @@ export function ProviderConnect({ onChanged }: { onChanged?: () => void }) {
         }
         await load();
         await loadConfig();
+        await refreshStatus();
         onChanged?.();
         toast(r.ok ? t('pv.connectedToast', { name: current.label }) : r.error ?? t('pv.failed'), r.ok ? 'ok' : 'error');
         return;
@@ -133,6 +134,7 @@ export function ProviderConnect({ onChanged }: { onChanged?: () => void }) {
       const r = await test(current.id);
       await load();
       await loadConfig();
+      await refreshStatus();
       onChanged?.();
       toast(r.ok ? t('pv.connectedToast', { name: current.label }) : r.error ?? t('pv.failed'), r.ok ? 'ok' : 'error');
     } catch (e) {
@@ -150,6 +152,7 @@ export function ProviderConnect({ onChanged }: { onChanged?: () => void }) {
     setModels([]);
     await load();
     await loadConfig();
+    await refreshStatus();
     onChanged?.();
   };
 
@@ -280,6 +283,7 @@ export function ProviderConnect({ onChanged }: { onChanged?: () => void }) {
                 disabled={!model || model === defaultRef}
                 onClick={async () => {
                   await updateConfig({ model: { default: model } });
+                  await refreshStatus();
                   toast(t('pv.defaultSet', { model }));
                   onChanged?.();
                 }}

@@ -213,6 +213,18 @@ async function cmdInteractive(args: ParsedArgs, prompt: string): Promise<void> {
     await rt.close();
     return cmdRun(args, [prompt, piped].filter(Boolean));
   }
+  if (!rt.providers.readiness(flagStr(args, 'model')).ok) {
+    // first run (or keys removed): connect a provider before chatting, never fall back to the demo
+    console.log(c.yellow(`\n${sym.warn} No model provider is connected yet — let's connect one.`));
+    try {
+      await runSetup(rt);
+    } catch {
+      /* setup cancelled */
+    }
+    if (!rt.providers.readiness(flagStr(args, 'model')).ok) {
+      console.log(c.gray('Still not connected — messages are kept, but nothing can answer them until you run `kronos setup` (or `kronos keys set <NAME> <key>`).'));
+    }
+  }
   const repl = new Repl(rt, { sessionId, initialPrompt: prompt || undefined, model: flagStr(args, 'model'), mode: modeFrom(args), verbose: Boolean(args.flags.verbose) });
   await repl.start();
 }

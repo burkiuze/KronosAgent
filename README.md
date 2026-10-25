@@ -33,7 +33,7 @@ git. Python 3 is optional (better PTY terminal in the app).
 # install (clones to ~/.kronos/app, builds, links `kronos` into ~/.local/bin)
 curl -fsSL https://raw.githubusercontent.com/burkiuze/KronosAgent/main/scripts/install.sh | bash
 
-kronos setup        # choose a model, paste an API key (or skip: offline demo mode)
+kronos setup        # connect a model provider: paste an API key or point it at a local model
 kronos              # chat in the terminal
 kronos web          # the desktop UI in your browser
 kronos gateway      # run 24/7: UI + messaging platforms + automations + API
@@ -55,8 +55,12 @@ cp .env.example .env    # add keys + KRONOS_GATEWAY_TOKEN
 docker compose up -d    # → http://localhost:7777/?token=<KRONOS_GATEWAY_TOKEN>
 ```
 
-No API key? Kronos still starts — an offline demo model lets you explore the UI, tools,
-skills, automations and the permission flow before you pick a provider.
+No API key yet? Kronos opens and asks you to connect a model provider first — the welcome
+screen, the composer and the status bar all have a **Connect a provider** button that goes
+straight to Settings → Providers & API keys. A message sent before that is accepted and kept in
+the chat with a "No model provider connected" card under it; once you connect, **Answer now**
+answers it right there — nothing is ever answered by a stand-in model. Local models (Ollama, LM Studio) need no key. The
+offline demo model is only used when you pick it explicitly (`--model demo`), e.g. for tests.
 
 ## What you get
 
@@ -213,15 +217,17 @@ bitirmesini sağlayabilir, sonra terminalden sorabilirsiniz.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/burkiuze/KronosAgent/main/scripts/install.sh | bash
-kronos setup     # model seçin, API anahtarı girin (ya da atlayın: çevrimdışı demo modu)
+kronos setup     # model sağlayıcısı bağlayın: API anahtarı girin ya da yerel model seçin
 kronos           # terminalde sohbet
 kronos web       # masaüstü arayüzü tarayıcıda
 kronos gateway   # 7/24 çalıştırma: arayüz + mesajlaşma + otomasyonlar + API
 ```
 
-Gereksinim: Node.js 20.19+ (22+ önerilir) ve git. API anahtarı olmadan da açılır; çevrimdışı
-demo modeliyle arayüzü, araçları ve izin akışını deneyebilirsiniz. Arayüz dili Ayarlar →
-Arayüz İngilizcedir; Kronos ise sana senin dilinde yanıt verir.
+Gereksinim: Node.js 20.19+ (22+ önerilir) ve git. İlk açılışta Kronos önce bir model
+sağlayıcısı bağlamanızı ister: karşılama ekranındaki **Connect a provider** düğmesi doğrudan
+Ayarlar → Providers & API keys bölümüne götürür. Bağlanmadan yazılan mesaj kabul edilir, sohbette
+altında bir uyarı ve aynı düğme çıkar; bağlandıktan sonra **Answer now** ile yanıtlanır (demo
+bir modelle asla yanıtlanmaz). Arayüz İngilizcedir; Kronos ise sana senin dilinde yanıt verir.
 
 ### Öne çıkanlar
 

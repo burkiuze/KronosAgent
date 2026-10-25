@@ -31,6 +31,8 @@ export interface ChatInput {
 interface Queued extends ChatInput {
   id: string;
   sessionId: string;
+  /** answer the message held while no provider was connected instead of sending a new one */
+  answerHeld?: boolean;
 }
 
 export interface RunningInfo {
@@ -156,6 +158,8 @@ export class Hub {
   async chat(input: ChatInput): Promise<{ sessionId: string; queued: boolean }> {
     const rt = this.rt;
     let sessionId = input.sessionId;
+    // with no provider connected the message is still accepted: the agent keeps it and emits a
+    // `no_provider` notice, and clients offer to connect one and answer it afterwards
     if (!sessionId || !rt.sessions.get(sessionId)) {
       const s = rt.createSession({
         id: sessionId,
@@ -184,6 +188,23 @@ export class Hub {
     return { sessionId, queued: false };
   }
 
+  /** Answer a message that arrived before a provider was connected (see Agent.answerHeld). */
+  answer(sessionId: string): { sessionId: string; queued: boolean } {
+    const agent = this.rt.agent(sessionId, { onPermission: this.uiPermission, onClarify: this.uiClarify });
+    if (!agent.heldMessage()) return { sessionId, queued: false };
+    if (agent.isRunning) throw new Error('This chat is busy — wait for the current run to finish.');
+    void this.process({ id: newId('q_'), sessionId, text: '', answerHeld: true });
+    return { sessionId, queued: false };
+  }
+
+  private nextQueued(sessionId: string): Queued | undefined {
+    const q = this.queues.get(sessionId);
+    const next = q?.shift();
+    if (q && !q.length) this.queues.delete(sessionId);
+    if (next) this.broadcast({ type: 'queued', sessionId, queue: this.queueOf(sessionId) });
+    return next;
+  }
+
   private async process(item: Queued): Promise<void> {
     const rt = this.rt;
     let next: Queued | undefined = item;
@@ -191,23 +212,23 @@ export class Hub {
       const current: Queued = next;
       try {
         const agent = rt.agent(current.sessionId, { onPermission: this.uiPermission, onClarify: this.uiClarify });
-        const expanded = await rt.expandInput(current.text, agent.session.cwd);
-        await agent.run(
-          {
-            text: expanded.text,
-            images: [...(current.images ?? []), ...(expanded.images ?? [])],
-            files: [...(current.files ?? []), ...(expanded.files ?? [])],
-            meta: expanded.meta,
-          },
-          { model: current.model },
-        );
+        if (current.answerHeld) await agent.answerHeld({ model: current.model });
+        else {
+          const expanded = await rt.expandInput(current.text, agent.session.cwd);
+          await agent.run(
+            {
+              text: expanded.text,
+              images: [...(current.images ?? []), ...(expanded.images ?? [])],
+              files: [...(current.files ?? []), ...(expanded.files ?? [])],
+              meta: expanded.meta,
+            },
+            { model: current.model },
+          );
+        }
       } catch (e) {
         this.broadcast({ type: 'error', sessionId: current.sessionId, message: errorMessage(e) });
       }
-      const q = this.queues.get(current.sessionId);
-      next = q?.shift();
-      if (q && !q.length) this.queues.delete(current.sessionId);
-      if (next) this.broadcast({ type: 'queued', sessionId: current.sessionId, queue: this.queueOf(current.sessionId) });
+      next = this.nextQueued(current.sessionId);
     }
   }
 

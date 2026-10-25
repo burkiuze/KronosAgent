@@ -301,7 +301,8 @@ export type AgentEvent =
   | { type: 'todos'; runId: string; todos: Todo[] }
   | { type: 'subagent'; runId: string; agentId: string; label: string; status: 'start' | 'running' | 'done' | 'error'; detail?: string }
   | { type: 'artifact'; runId: string; artifact: ArtifactRef & { id: string } }
-  | { type: 'notice'; runId: string; level: 'info' | 'warn' | 'error'; text: string }
+  /** code: machine-readable reason, e.g. `no_provider` when no model provider is connected */
+  | { type: 'notice'; runId: string; level: 'info' | 'warn' | 'error'; text: string; code?: string }
   | { type: 'title'; runId: string; sessionId: string; title: string }
   | { type: 'run_end'; runId: string; stopReason: StopReason; text: string; usage: Usage; durationMs: number; error?: string };
 

@@ -24,7 +24,7 @@ kronos config path                 # where the file lives
 
 | Key | Default | Description |
 |---|---|---|
-| `model.default` | `auto` | `provider:model` or an alias (`opus`, `sonnet`, `haiku`, `fable`, `gpt`, `gemini`, `hermes`, `grok`, `deepseek`, `kimi`, `local`, `demo`). `auto` picks the best configured provider. |
+| `model.default` | `auto` | `provider:model` or an alias (`opus`, `sonnet`, `haiku`, `fable`, `gpt`, `gemini`, `hermes`, `grok`, `deepseek`, `kimi`, `local`, `demo`). `auto` picks the best configured provider; with none connected, chats are refused with a "connect a provider" prompt (the demo model is never picked automatically). |
 | `model.fallbacks` | `[]` | Tried in order when the primary fails with a non-retryable or exhausted error. |
 | `model.effort` | `medium` | `low` · `medium` (recommended) · `high` · `xhigh` · `max` · `codemaster` — reasoning effort; Codemaster = max effort plus a plan → parallel exploration → tests → independent review workflow. |
 | `model.thinking` / `model.showThinking` | `true` / `true` | Extended thinking, and streaming its summaries to the UI. |

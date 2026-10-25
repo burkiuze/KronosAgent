@@ -26,6 +26,22 @@ export class MissingCredentialsError extends ProviderError {
   }
 }
 
+/**
+ * No model provider is connected (or the chosen model's provider has no key). Kronos never falls
+ * back to the offline demo model on its own; surfaces show a "connect a provider" prompt instead.
+ */
+export class NotConnectedError extends Error {
+  readonly code = 'no_provider';
+  constructor(readonly provider?: string) {
+    super(
+      provider
+        ? `The ${provider} provider is not connected. Add its API key in Settings → Providers & API keys (or run \`kronos setup\`).`
+        : 'No model provider is connected. Connect one in Settings → Providers & API keys (or run `kronos setup`).',
+    );
+    this.name = 'NotConnectedError';
+  }
+}
+
 export function isRetryableStatus(status?: number): boolean {
   return status === 408 || status === 409 || status === 425 || status === 429 || (status !== undefined && status >= 500);
 }

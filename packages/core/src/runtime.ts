@@ -2,6 +2,8 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSy
 import { join, basename, extname } from 'node:path';
 import { homedir } from 'node:os';
 import type { AgentEvent, FilePart, ImagePart, PermissionMode, UserInput } from './types.js';
+import { emptyUsage } from './types.js';
+import { NotConnectedError } from './providers/errors.js';
 import type { KronosConfig } from './config/schema.js';
 import { loadConfig, saveConfigPatch, setConfigValue, type LoadedConfig } from './config/load.js';
 import { activeProfile, bundledSkillsDir, ensureDirs, kronosHome, profileDir, profilePaths, resolvePath, type ProfilePaths } from './config/paths.js';
@@ -382,6 +384,14 @@ export class Kronos {
     prompt: string | UserInput,
     opts: { sessionId?: string; model?: string; source?: string; mode?: PermissionMode; autoApprove?: boolean; preloadSkills?: string[]; cwd?: string; title?: string; signal?: AbortSignal; onEvent?: (e: AgentEvent) => void } = {},
   ) {
+    // nothing to run with: report it without creating an empty session (a session pinned to the
+    // demo model only because nothing was connected follows the default, as in Agent.run)
+    const pinned = opts.sessionId ? this.sessions.get(opts.sessionId)?.model : undefined;
+    const pinnedRef = pinned && !(pinned.startsWith('kronos:') && !this.providers.demoAllowed(opts.model)) ? pinned : undefined;
+    const ready = this.providers.readiness(opts.model ?? pinnedRef);
+    if (!ready.ok) {
+      return { runId: '', text: '', stopReason: 'error' as const, usage: emptyUsage(), durationMs: 0, error: new NotConnectedError(ready.provider).message, toolCalls: 0, sessionId: opts.sessionId ?? '' };
+    }
     const session = opts.sessionId
       ? (this.sessions.get(opts.sessionId) ?? this.createSession({ id: opts.sessionId, source: opts.source ?? 'api', cwd: opts.cwd, title: opts.title }))
       : this.createSession({ source: opts.source ?? 'api', model: opts.model ? this.providers.resolve(opts.model).ref : '', cwd: opts.cwd, title: opts.title, mode: opts.mode ?? this.config.safety.mode });

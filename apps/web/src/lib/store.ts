@@ -315,6 +315,20 @@ export async function deleteSession(id: string): Promise<void> {
   refreshSessions();
 }
 
+/** Answer the message that was sent before a provider was connected. */
+export async function answerHeld(sessionId: string): Promise<void> {
+  // the server re-sends the held message as a real turn; show it as pending until it does
+  const chat = chatOf(sessionId);
+  const held = chat.messages.at(-1);
+  if (held?.meta?.unanswered === 'no_provider') updateChat(sessionId, (c) => ({ messages: c.messages.slice(0, -1), pendingUser: held }));
+  try {
+    await post(`/api/sessions/${sessionId}/answer`);
+  } catch (e) {
+    toast((e as Error).message, 'error');
+    void loadSession(sessionId);
+  }
+}
+
 export async function undoLast(id: string): Promise<void> {
   const r = await post<{ removed: number; restoredFiles: string[] }>(`/api/sessions/${id}/undo`);
   await loadSession(id);
@@ -439,6 +453,11 @@ function handleAgentEvent(sessionId: string, e: AgentEvent): void {
       updateChat(sessionId, (c) => ({ subagents: { ...c.subagents, [e.agentId]: { agentId: e.agentId, label: e.label, status: e.status, detail: e.detail } } }));
       break;
     case 'notice':
+      if (e.code === 'no_provider') {
+        // the message was kept; the chat shows a "connect a provider" card under it instead
+        void refreshStatus();
+        break;
+      }
       updateChat(sessionId, (c) => ({ notices: [...c.notices.slice(-4), { id: Math.random().toString(36).slice(2), level: e.level, text: e.text }] }));
       if (e.level === 'error') toast(e.text, 'error');
       break;

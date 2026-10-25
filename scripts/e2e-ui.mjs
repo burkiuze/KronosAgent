@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// End-to-end smoke test of the web UI: boots a gateway on a throwaway home with the offline
-// demo model, drives the UI with Playwright (chromium) and fails on any page error.
+// End-to-end smoke test of the web UI: first boots a fresh install (no provider connected) to
+// check the connect-first flow, then a gateway on a throwaway home with the offline demo model;
+// drives the UI with Playwright (chromium) and fails on any page error.
 // Usage: npm run build && npm run build:web && npm run test:e2e   (SCREENSHOTS=dir to keep shots)
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,6 +22,7 @@ writeFileSync(join(ws, 'app.ts'), 'export const answer = 42;\n');
 const shots = process.env.SCREENSHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
 
+const freshHome = mkdtempSync(join(tmpdir(), 'kronos-e2e-fresh-'));
 const rt = await Kronos.create({
   home,
   cwd: ws,
@@ -31,13 +33,26 @@ const rt = await Kronos.create({
 // a fake OpenAI-compatible API so the provider "connect" flow can be exercised offline
 const fakeApi = createServer((req, res) => {
   const ok = req.headers.authorization === 'Bearer sk-good';
+  if (ok && req.method === 'POST' && req.url?.endsWith('/chat/completions')) {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const chunk = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+    chunk({ choices: [{ index: 0, delta: { role: 'assistant', content: 'Hi from the connected model' } }] });
+    chunk({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 5 } });
+    res.end('data: [DONE]\n\n');
+    return;
+  }
   res.writeHead(ok ? 200 : 401, { 'content-type': 'application/json' });
   res.end(ok ? JSON.stringify({ data: [{ id: 'gpt-fake-large' }, { id: 'gpt-fake-mini' }] }) : '{"error":{"message":"invalid api key"}}');
 });
 await new Promise((r) => fakeApi.listen(0, '127.0.0.1', r));
-rt.updateConfig({ providers: { openai: { baseUrl: `http://127.0.0.1:${fakeApi.address().port}/v1` } } });
+const fakeOpenAi = { providers: { openai: { baseUrl: `http://127.0.0.1:${fakeApi.address().port}/v1` } } };
+rt.updateConfig(fakeOpenAi);
+// a fresh install: model "auto" and no keys anywhere — nothing to answer with until a provider is connected
+const freshRt = await Kronos.create({ home: freshHome, cwd: ws, connectMcp: false, logLevel: 'silent', overrides: { skills: { claudeCompat: false } } });
+freshRt.updateConfig(fakeOpenAi);
 
 const gw = await Gateway.start(rt, { port: 0, host: '127.0.0.1', platforms: false, cron: false, token: 'e2e-token', quiet: true });
+const freshGw = await Gateway.start(freshRt, { port: 0, host: '127.0.0.1', platforms: false, cron: false, token: 'e2e-token', quiet: true });
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const errors = [];
@@ -70,6 +85,42 @@ async function nav(label) {
 
 let failed = false;
 try {
+  console.log(`Kronos e2e — fresh install ${freshGw.url}`);
+  await check('first launch asks to connect a model provider', async () => {
+    await page.goto(`${freshGw.url}/?token=e2e-token`);
+    await page.locator('.welcome-title', { hasText: 'KRONOS AGENT' }).waitFor({ timeout: 15000 });
+    await page.locator('.welcome .connect-card', { hasText: 'Connect a model to get started' }).waitFor({ timeout: 5000 });
+    await page.locator('.welcome .connect-chip', { hasText: 'Connect a model' }).waitFor({ timeout: 5000 });
+    if (await page.locator('.welcome-demo, .me-model:not(.connect-chip)').count()) throw new Error('a demo/model chip is still offered');
+  });
+  await check('a message without a provider is kept, with a connect prompt under it', async () => {
+    await send('Hello Kronos!');
+    await page.locator('.user-msg', { hasText: 'Hello Kronos!' }).first().waitFor({ timeout: 10000 });
+    const card = page.locator('.thread .connect-card.attention', { hasText: 'No model provider connected' });
+    await card.waitFor({ timeout: 5000 });
+    await card.locator('.connect-btn', { hasText: 'Connect a provider' }).waitFor();
+    if (await page.locator('.assistant-turn').count()) throw new Error('something answered without a provider');
+  });
+  await check('the connect button opens Providers & API keys', async () => {
+    await page.locator('.thread .connect-card .connect-btn', { hasText: 'Connect a provider' }).click();
+    await page.locator('.settings-nav-item.active', { hasText: /Providers/ }).waitFor({ timeout: 5000 });
+    const openaiTile = page.locator('.pv-tile', { has: page.locator('.pv-name', { hasText: /^OpenAI$/ }) });
+    await openaiTile.click();
+    await page.locator('.pv-panel input[type="password"]').fill('sk-good');
+    await page.locator('.pv-panel .btn.primary').first().click();
+    await page.locator('.pv-result.ok').waitFor({ timeout: 10000 });
+    await page.keyboard.press('Escape');
+  });
+  await check('once connected, the kept message gets its answer', async () => {
+    await page.locator('.thread .connect-card .connect-btn', { hasText: 'Answer now' }).click();
+    await page.locator('.assistant-turn', { hasText: 'Hi from the connected model' }).waitFor({ timeout: 10000 });
+    await page.locator('.thread .connect-card').waitFor({ state: 'detached', timeout: 5000 });
+    const users = await page.locator('.thread').getByText('Hello Kronos!', { exact: true }).count();
+    if (users !== 1) throw new Error(`the message shows ${users} times`);
+  });
+  await freshGw.close();
+  delete process.env.OPENAI_API_KEY;
+
   console.log(`Kronos e2e — ${gw.url}`);
   await check('loads the app', async () => {
     await page.goto(`${gw.url}/?token=e2e-token`);
@@ -202,7 +253,9 @@ try {
   await browser.close();
   fakeApi.close();
   await gw.close();
+  await freshGw.close().catch(() => undefined);
   rmSync(home, { recursive: true, force: true });
+  rmSync(freshHome, { recursive: true, force: true });
   rmSync(ws, { recursive: true, force: true });
 }
 process.exit(failed ? 1 : 0);

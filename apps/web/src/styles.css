@@ -2074,34 +2074,81 @@ kbd {
   width: 300px;
 }
 
-.welcome-demo {
+.connect-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
   margin-top: 14px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  font-size: 0.84em;
-  line-height: 1.5;
-  text-align: center;
-  color: var(--faint);
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--elev);
+  text-align: left;
 }
 
-.welcome-demo svg {
-  vertical-align: -2px;
-  margin-right: 7px;
+.connect-card.attention {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--elev));
 }
 
-.welcome-demo b {
-  margin-left: 7px;
-  color: var(--dim);
-  font-weight: 550;
-  white-space: nowrap;
+.thread .connect-card {
+  margin: 4px 0 8px;
 }
 
-.welcome-demo:hover {
+.connect-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 10px;
   background: var(--hover);
+  color: var(--dim);
 }
 
-.welcome-demo:hover b {
-  color: var(--text);
+.connect-card.attention .connect-icon {
+  color: var(--accent);
+}
+
+.connect-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.connect-text b {
+  font-weight: 600;
+  font-size: 0.95em;
+}
+
+.connect-text span {
+  color: var(--dim);
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+.connect-btn {
+  flex: none;
+}
+
+.cbtn.connect-chip,
+.cbtn.connect-chip .cbtn-label {
+  color: var(--accent);
+  font-weight: 550;
+}
+
+@media (max-width: 600px) {
+  .connect-card {
+    flex-wrap: wrap;
+  }
+
+  .connect-btn {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 .kronos-mark {

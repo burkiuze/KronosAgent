@@ -71,12 +71,18 @@ export function StatusBar() {
           {t('status.session')} <span className="sb-dim">{shortDuration(now - sessionStart)}</span>
         </span>
       )}
-      <ModelPicker compact>
-        <span className="sb-item model">
-          <Cpu size={12} /> {modelLabel(session?.model, status?.model?.name)}
-          <span className="sb-dim">{providerOf(session?.model ?? status?.model?.ref)}</span>
-        </span>
-      </ModelPicker>
+      {status?.needsProvider ? (
+        <button className="sb-item warn" onClick={() => setState({ settings: 'keys' })}>
+          <Cpu size={12} /> {t('connect.chip')}
+        </button>
+      ) : (
+        <ModelPicker compact>
+          <span className="sb-item model">
+            <Cpu size={12} /> {modelLabel(session?.model, status?.model?.name)}
+            <span className="sb-dim">{providerOf(session?.model ?? status?.model?.ref)}</span>
+          </span>
+        </ModelPicker>
+      )}
     </footer>
   );
 }

@@ -165,3 +165,76 @@ describe('eval trajectories', () => {
     expect(got[0]!.some((m) => m.parts.some((p) => p.type === 'tool_call' && p.name === 'list_dir'))).toBe(true);
   });
 });
+
+describe('no demo fallback', () => {
+  // a fresh install: model "auto", no keys anywhere
+  let fresh: TestEnv;
+  beforeEach(async () => {
+    fresh = await makeRuntime({ model: { default: 'auto' } });
+  });
+  afterEach(async () => {
+    delete process.env.OPENAI_API_KEY;
+    await fresh.cleanup();
+  });
+
+  it('needs a connected provider unless the demo model was chosen explicitly', () => {
+    expect(env.rt.providers.readiness()).toEqual({ ok: true }); // test runtimes pick kronos:demo on purpose
+    expect(fresh.rt.providers.readiness()).toEqual({ ok: false, reason: 'no_provider' });
+    expect(fresh.rt.providers.readiness('demo')).toEqual({ ok: true });
+    expect(fresh.rt.providers.readiness('openai:gpt-5.5')).toEqual({ ok: false, reason: 'missing_key', provider: 'openai' });
+    process.env.OPENAI_API_KEY = 'sk-test';
+    expect(fresh.rt.providers.readiness()).toEqual({ ok: true });
+  });
+
+  it('keeps the message, says "connect a provider", and answers it once one is connected', async () => {
+    const s = fresh.rt.createSession({ source: 'test' });
+    const notices: unknown[] = [];
+    const off = fresh.rt.events.on((e) => (e as { event?: { type: string } }).event?.type === 'notice' && notices.push((e as { event: unknown }).event));
+    const agent = fresh.rt.agent(s.id);
+    const res = await agent.run('hello');
+    off();
+    expect(res.stopReason).toBe('error');
+    expect(res.error).toMatch(/No model provider is connected/);
+    expect(notices).toEqual([expect.objectContaining({ level: 'error', code: 'no_provider' })]);
+    const held = fresh.rt.sessions.messages(s.id);
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ role: 'user', meta: { unanswered: 'no_provider' } });
+    // still nothing connected: answering again keeps the single held message
+    expect((await agent.answerHeld())?.error).toMatch(/No model provider/);
+    expect(fresh.rt.sessions.messages(s.id)).toHaveLength(1);
+
+    process.env.OPENAI_API_KEY = 'sk-test';
+    inject(fresh.rt, 'openai', {
+      id: 'openai',
+      async chat(): Promise<ChatResponse> {
+        return { parts: [{ type: 'text', text: 'real answer' }], stopReason: 'end_turn', usage, model: 'gpt' };
+      },
+    } as Provider);
+    expect((await agent.answerHeld())?.text).toBe('real answer');
+    const after = fresh.rt.sessions.messages(s.id).filter((m) => m.role !== 'system');
+    expect(after.map((m) => [m.role, messageText(m)])).toEqual([['user', 'hello'], ['assistant', 'real answer']]);
+    expect(after[0]?.meta?.unanswered).toBeUndefined();
+    expect(agent.heldMessage()).toBeUndefined();
+  });
+
+  it('refuses headless runs before creating a session', async () => {
+    const before = fresh.rt.sessions.list({ includeChildren: true }).length;
+    const headless = await fresh.rt.runHeadless('hello', { source: 'api' });
+    expect(headless.error).toMatch(/No model provider is connected/);
+    expect(fresh.rt.sessions.list({ includeChildren: true }).length).toBe(before);
+  });
+
+  it('moves a chat that was pinned to the demo model onto a provider connected later', async () => {
+    const s = fresh.rt.createSession({ source: 'test', model: 'kronos:demo' });
+    process.env.OPENAI_API_KEY = 'sk-test';
+    inject(fresh.rt, 'openai', {
+      id: 'openai',
+      async chat(): Promise<ChatResponse> {
+        return { parts: [{ type: 'text', text: 'real answer' }], stopReason: 'end_turn', usage, model: 'gpt' };
+      },
+    } as Provider);
+    const res = await fresh.rt.agent(s.id).run('hello');
+    expect(res.text).toBe('real answer');
+    expect(fresh.rt.sessions.get(s.id)?.model.startsWith('openai:')).toBe(true);
+  });
+});

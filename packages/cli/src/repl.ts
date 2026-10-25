@@ -131,7 +131,7 @@ export class Repl {
     this.println(`  ${c.gray('A G E N T')}  ${c.dim(`v${KRONOS_VERSION}`)}  ${c.gray('— the agent that keeps time on your side')}`);
     this.println();
     const rows: [string, string][] = [
-      ['Model', `${model.name} ${c.gray(`(${model.ref})`)}${model.provider === 'kronos' ? c.yellow('  ← demo mode: run `kronos setup` to add a key') : ''}`],
+      ['Model', `${model.name} ${c.gray(`(${model.ref})`)}${model.provider === 'kronos' ? c.yellow('  ← offline demo model (chosen explicitly)') : ''}`],
       ['Mode', this.modeLabel(this.agent.mode)],
       ['Profile', rt.profile],
       ['Workspace', this.agent.session.cwd],

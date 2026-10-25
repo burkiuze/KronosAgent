@@ -222,6 +222,7 @@ export const Composer = memo(function Composer({ centered }: { centered?: boolea
   const modelRef = session?.model || getState().draftModel || status?.model?.ref;
   const modelName = useModelName(modelRef, modelRef === status?.model?.ref ? status?.model?.name : undefined);
   const effort = (config?.model?.effort as EffortLevel | undefined) ?? 'medium';
+  const needsProvider = Boolean(status?.needsProvider);
 
   const modeOptions = (close: () => void) =>
     MODE_IDS.map(modeLabel).map((m) => (
@@ -409,13 +410,19 @@ export const Composer = memo(function Composer({ centered }: { centered?: boolea
                 {(close) => <div className="mode-menu">{modeOptions(close)}</div>}
               </Menu>
               <ContextRing percent={chat.context?.percent ?? 0} />
-              <ModelPicker>
-                <span className="cbtn" title={modelRef}>
-                  {modelRef && !modelRef.startsWith('kronos:') && <ProviderLogo id={modelRef.split(':')[0] ?? ''} label={modelRef} size={20} />}
-                  <span className="cbtn-label">{modelName}</span>
-                  <ChevronDown size={13} className="cbtn-chev" />
-                </span>
-              </ModelPicker>
+              {needsProvider ? (
+                <button className="cbtn connect-chip" onClick={() => setState({ settings: 'keys' })}>
+                  <span className="cbtn-label">{t('connect.chip')}</span>
+                </button>
+              ) : (
+                <ModelPicker>
+                  <span className="cbtn" title={modelRef}>
+                    {modelRef && !modelRef.startsWith('kronos:') && <ProviderLogo id={modelRef.split(':')[0] ?? ''} label={modelRef} size={20} />}
+                    <span className="cbtn-label">{modelName}</span>
+                    <ChevronDown size={13} className="cbtn-chev" />
+                  </span>
+                </ModelPicker>
+              )}
               {effortMenu}
             </>
           )}
@@ -423,11 +430,17 @@ export const Composer = memo(function Composer({ centered }: { centered?: boolea
           <div className="flex-1" />
           {centered && (
             <span className="model-effort">
-              <ModelPicker compact down>
-                <span className="cbtn me-model" title={modelRef}>
-                  {modelName}
-                </span>
-              </ModelPicker>
+              {needsProvider ? (
+                <button className="cbtn me-model connect-chip" onClick={() => setState({ settings: 'keys' })}>
+                  {t('connect.chip')}
+                </button>
+              ) : (
+                <ModelPicker compact down>
+                  <span className="cbtn me-model" title={modelRef}>
+                    {modelName}
+                  </span>
+                </ModelPicker>
+              )}
               {effortMenu}
             </span>
           )}

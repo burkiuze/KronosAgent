@@ -27,6 +27,7 @@ import {
   readYamlFile,
   writeYamlFile,
   runProcess,
+  NotConnectedError,
 } from '@kronos/core';
 import { HttpError, Router, sendFile, mimeFor } from './http.js';
 import type { Gateway } from './server.js';
@@ -80,6 +81,8 @@ export function buildApi(gw: Gateway): Router {
       cwd: k.workspace(),
       model,
       demo: model.provider === 'kronos',
+      /** no usable model: the UI asks the user to connect a provider instead of chatting */
+      needsProvider: !k.providers.readiness().ok,
       agentName: k.config.agent.name,
       running: gw.hub.runningList(),
       pending: gw.hub.pending(),
@@ -278,12 +281,17 @@ export function buildApi(gw: Gateway): Router {
   // ---------------------------------------------------------------- chat (REST alternative to WS)
   r.post('/api/chat', async (req) => {
     const b = await req.body<{ sessionId?: string; text: string; model?: string; mode?: PermissionMode; wait?: boolean }>();
+    // API clients get a clear 409 instead of a chat that waits for a provider
+    const pinned = b.sessionId ? rt().sessions.get(b.sessionId)?.model : undefined;
+    const ready = rt().providers.readiness(b.model ?? (pinned && !pinned.startsWith('kronos:') ? pinned : undefined));
+    if (!ready.ok) throw new NotConnectedError(ready.provider);
     if (b.wait) {
       const res = await rt().runHeadless(b.text, { sessionId: b.sessionId, model: b.model, mode: b.mode, source: 'api' });
       return res;
     }
     return gw.hub.chat({ sessionId: b.sessionId, text: b.text, model: b.model, mode: b.mode, source: 'api' });
   });
+  r.post('/api/sessions/:id/answer', (req) => gw.hub.answer(req.params.id as string));
   r.post('/api/sessions/:id/stop', (req) => {
     gw.hub.stop(req.params.id as string);
     return { ok: true };

@@ -34,6 +34,7 @@ import { validateInput } from '../util/schema.js';
 import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError } from '../util/misc.js';
 import { estimateMessagesTokens, estimateTokens, redactSecrets, truncate, truncateMiddle } from '../util/text.js';
 import { costOf } from '../providers/catalog.js';
+import { NotConnectedError } from '../providers/errors.js';
 import { logger } from '../util/log.js';
 
 const log = logger('agent');
@@ -178,8 +179,8 @@ export class Agent {
     this.rt.emitAgentEvent(this.session.id, e);
   }
 
-  private notice(level: 'info' | 'warn' | 'error', text: string): void {
-    this.emit({ type: 'notice', runId: this.currentRunId, level, text });
+  private notice(level: 'info' | 'warn' | 'error', text: string, code?: string): void {
+    this.emit({ type: 'notice', runId: this.currentRunId, level, text, ...(code ? { code } : {}) });
   }
 
   private append(msgs: Message[]): void {
@@ -430,6 +431,17 @@ export class Agent {
 
   async run(input: UserInput | string, opts: AgentRunOptions = {}): Promise<AgentRunResult> {
     if (this.running) throw new Error('This agent is already running. Interrupt it or wait for it to finish.');
+    // A session that was pinned to the demo model only because nothing was connected follows the
+    // default again, so connecting a provider later takes effect in existing chats too.
+    if (this.session.model?.startsWith('kronos:') && !this.rt.providers.demoAllowed(opts.model)) this.saveSession({ model: '' });
+    const ready = this.rt.providers.readiness(opts.model ?? (this.session.model || undefined));
+    if (!ready.ok) {
+      // never answer with the offline demo model by accident: keep the message, say what is missing
+      const error = new NotConnectedError(ready.provider).message;
+      this.holdUnanswered(typeof input === 'string' ? { text: input } : input);
+      this.notice('error', error, 'no_provider');
+      return { runId: '', text: '', stopReason: 'error', usage: emptyUsage(), durationMs: 0, error, toolCalls: 0 };
+    }
     const inp: UserInput = typeof input === 'string' ? { text: input } : input;
     this.running = true;
     const runId = newId('r_');
@@ -1044,6 +1056,51 @@ export class Agent {
     this.rt.sessions.truncate(this.session.id, idx);
     const restoredFiles = this.rt.config.safety.checkpoints ? this.rt.checkpoints.restore(this.session.id, turn) : [];
     return { removed, restoredFiles, text };
+  }
+
+  /** Keeps a message that cannot be answered yet (no provider connected), flagged so clients can offer to answer it later. */
+  private holdUnanswered(inp: UserInput): void {
+    const parts: Part[] = [];
+    if (inp.text) parts.push({ type: 'text', text: inp.text });
+    for (const f of inp.files ?? []) parts.push(f);
+    for (const img of inp.images ?? []) parts.push(img);
+    if (!parts.length) return;
+    const msg: Message = { id: newId('m_'), role: 'user', parts, createdAt: Date.now(), meta: { ...inp.meta, unanswered: 'no_provider' } };
+    this.append([msg]);
+    this.emit({ type: 'message', runId: '', message: msg });
+  }
+
+  /** The last message, if it is still waiting for a provider to be connected. */
+  heldMessage(): Message | undefined {
+    const last = this.messages.at(-1);
+    return last?.role === 'user' && last.meta?.unanswered === 'no_provider' ? last : undefined;
+  }
+
+  /** Answers a message that arrived before any provider was connected. */
+  async answerHeld(opts: AgentRunOptions = {}): Promise<AgentRunResult | null> {
+    if (this.running) throw new Error('This agent is already running. Interrupt it or wait for it to finish.');
+    const held = this.heldMessage();
+    if (!held) return null;
+    const ready = this.rt.providers.readiness(opts.model ?? (this.session.model && !this.session.model.startsWith('kronos:') ? this.session.model : undefined));
+    if (!ready.ok) {
+      const error = new NotConnectedError(ready.provider).message;
+      this.notice('error', error, 'no_provider');
+      return { runId: '', text: '', stopReason: 'error', usage: emptyUsage(), durationMs: 0, error, toolCalls: 0 };
+    }
+    // replace the held message with a real turn carrying the same content
+    this.messages = this.messages.slice(0, -1);
+    this.contextEpoch += 1;
+    this.rt.sessions.truncate(this.session.id, this.messages.length);
+    const { unanswered: _held, ...meta } = held.meta ?? {};
+    return this.run(
+      {
+        text: held.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(''),
+        files: held.parts.filter((p) => p.type === 'file') as UserInput['files'],
+        images: held.parts.filter((p) => p.type === 'image') as UserInput['images'],
+        meta: Object.keys(meta).length ? meta : undefined,
+      },
+      opts,
+    );
   }
 
   async retry(opts: AgentRunOptions = {}): Promise<AgentRunResult | null> {
