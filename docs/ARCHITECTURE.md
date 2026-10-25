@@ -94,6 +94,26 @@ Key properties:
      the app under "Show earlier messages".
   3. *Trim* — if the summary call fails, the recent turns are kept and the rest is archived with
      a note, so the user's task continues instead of failing.
+- **Weak-model harness** (`providers/toolcalls.ts`) — good work from small, old and free models:
+  - tool-call arguments are parsed with JSON repair (trailing commas, single quotes, unquoted
+    keys, Python literals, raw newlines, truncation, double encoding);
+  - calls a model writes into its text are recognised: Hermes/Qwen `<tool_call>`, Qwen3-Coder and
+    Llama `<function=…>`, Llama `<|python_tag|>`, Mistral `[TOOL_CALLS]`, `<invoke>`, Cline-style
+    `<read_file>…</read_file>`, fenced or bare JSON. Tagged formats always count; ambiguous ones
+    only in the text protocol or when the reply is little more than the call, so an example in a
+    real answer never fires a tool;
+  - near-miss tool names (`bash`, `str_replace`, `functions.read_file`, typos) and argument names
+    (`file_path`, `cmd`, `old_str`, `oldString` …) map onto the real ones; failed calls return the
+    expected arguments and an example call;
+  - **text tool protocol** (`model.toolMode`): tools described in the system prompt, calls and
+    results replayed as `<tool_call>` / `<tool_result>` text. `auto` switches a model to it when
+    its provider rejects the `tools` parameter;
+  - **lean mode** (`agent.lean`, auto for windows ≤ 32k): 14 core tools, first-sentence
+    descriptions and an 8-rule prompt — ~2.4k instead of ~9k fixed tokens;
+  - `<think>…</think>` in the content stream (R1, QwQ and other local reasoning models) is routed
+    to thinking, never into the answer or history;
+  - an empty reply, or one that announces an action without calling a tool, gets one short nudge
+    to continue (a real final answer is never blocked).
 - **Syntax check after edits** (`agent.editDiagnostics`): files written by `write_file`,
   `edit_file`, `multi_edit` or `apply_patch` are parsed at once (TS/JS via the workspace's or
   Kronos's TypeScript parser, else `node --check`; JSON, YAML, Python `ast`), and parse errors with

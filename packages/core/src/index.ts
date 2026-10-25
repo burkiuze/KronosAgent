@@ -17,6 +17,7 @@ export { ProviderRegistry, modelAliases, aliasFor, type ProviderStatus, type Con
 export { PROVIDERS, catalogModels, parseModelRef, costOf, getPreset, type ProviderPreset } from './providers/catalog.js';
 export { AnthropicProvider, toAnthropicMessages } from './providers/anthropic.js';
 export { OpenAICompatProvider, toOpenAIMessages, extractInlineToolCalls } from './providers/openai.js';
+export { repairJson, parseToolArgs, extractTextToolCalls, resolveToolName, textToolPrompt, isToolsUnsupportedError, ThinkSplitter } from './providers/toolcalls.js';
 export { DemoProvider } from './providers/demo.js';
 export { ProviderError, MissingCredentialsError, NotConnectedError } from './providers/errors.js';
 

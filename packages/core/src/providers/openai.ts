@@ -2,6 +2,7 @@ import type { ChatRequest, ChatResponse, Message, ModelInfo, Part, Provider, Sto
 import { MissingCredentialsError, ProviderError, isRetryableStatus, parseRetryAfter } from './errors.js';
 import { genericModel } from './catalog.js';
 import { newId } from '../util/misc.js';
+import { ThinkSplitter, extractTextToolCalls, isToolsUnsupportedError, parseToolArgs, renderToolCallText, renderToolResultText, textToolPrompt } from './toolcalls.js';
 
 export interface OpenAICompatOptions {
   id: string;
@@ -30,6 +31,8 @@ interface OAIMessage {
  */
 export class OpenAICompatProvider implements Provider {
   readonly id: string;
+  /** models that rejected native tool calling in this process: they get the text protocol */
+  private readonly textToolModels = new Set<string>();
   constructor(private readonly opts: OpenAICompatOptions) {
     this.id = opts.id;
   }
@@ -52,18 +55,26 @@ export class OpenAICompatProvider implements Provider {
     return h;
   }
 
+  /** Tools described in the prompt and called as text, for models without native function calling. */
+  private textTools(req: ChatRequest): boolean {
+    if (!req.tools.length || req.toolMode === 'native') return false;
+    return req.toolMode === 'text' || req.model.tools === false || this.textToolModels.has(req.model.id);
+  }
+
   private body(req: ChatRequest): Record<string, unknown> {
     const model = req.model;
+    const text = this.textTools(req);
+    const system = text ? `${req.system}\n\n${textToolPrompt(req.tools)}` : req.system;
     const body: Record<string, unknown> = {
       model: model.id,
-      messages: toOpenAIMessages(req.system, req.messages, model.vision !== false),
+      messages: toOpenAIMessages(system, req.messages, model.vision !== false, text),
       stream: true,
       stream_options: { include_usage: true },
     };
     const maxTokens = Math.min(req.maxTokens, model.maxOutput || req.maxTokens);
     if (this.opts.flavor === 'openai') body.max_completion_tokens = maxTokens;
     else body.max_tokens = maxTokens;
-    if (req.tools.length) {
+    if (req.tools.length && !text) {
       body.tools = req.tools.map((t) => ({
         type: 'function',
         function: { name: t.name, description: t.description, parameters: { type: 'object', ...t.parameters } },
@@ -105,6 +116,12 @@ export class OpenAICompatProvider implements Provider {
       } catch {
         /* not json */
       }
+      // the model cannot take native tools: switch it to the text protocol and ask again
+      if (!this.textTools(req) && req.tools.length && req.toolMode !== 'native' && isToolsUnsupportedError(msg)) {
+        this.textToolModels.add(req.model.id);
+        onEvent({ type: 'notice', level: 'info', text: `${req.model.name} has no native tool calling — using the text tool protocol.` });
+        return this.chat(req, onEvent);
+      }
       throw new ProviderError(
         `${this.opts.label ?? this.id} error ${res.status}: ${msg.slice(0, 800)}`,
         this.id,
@@ -124,6 +141,20 @@ export class OpenAICompatProvider implements Provider {
     let usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     let servedModel = req.model.id;
     const calls = new Map<number, { id: string; name: string; args: string }>();
+    const textMode = this.textTools(req);
+    let callStarted = false;
+    // <think>…</think> inside the content is reasoning, not answer text
+    const split = new ThinkSplitter((kind, s) => {
+      if (kind === 'thinking') {
+        thinking += s;
+        onEvent({ type: 'thinking', text: s });
+        return;
+      }
+      text += s;
+      // in the text protocol, the call itself is not prose: stop streaming at its first tag
+      if (textMode && !callStarted && /<tool_call>|<function=/.test(text.slice(-s.length - 12))) callStarted = true;
+      if (!callStarted) onEvent({ type: 'text', text: s });
+    });
 
     const handleChunk = (j: Record<string, unknown>) => {
       if (typeof j.model === 'string') servedModel = j.model;
@@ -150,10 +181,7 @@ export class OpenAICompatProvider implements Provider {
         thinking += r;
         onEvent({ type: 'thinking', text: r });
       }
-      if (typeof delta.content === 'string' && delta.content) {
-        text += delta.content;
-        onEvent({ type: 'text', text: delta.content });
-      }
+      if (typeof delta.content === 'string' && delta.content) split.push(delta.content);
       const tcs = delta.tool_calls as { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] | undefined;
       for (const [k, tc] of (tcs ?? []).entries()) {
         const idx = tc.index ?? k;
@@ -212,16 +240,17 @@ export class OpenAICompatProvider implements Provider {
       }
     }
 
+    split.flush();
     const parts: Part[] = [];
     if (thinking) parts.push({ type: 'thinking', text: thinking, provider: this.id, model: servedModel });
     const toolCalls: ToolCallPart[] = [];
     for (const c of [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v)) {
       if (!c.name) continue;
-      toolCalls.push({ type: 'tool_call', id: c.id, name: c.name, input: parseArgs(c.args) });
+      toolCalls.push({ type: 'tool_call', id: c.id, name: c.name, input: parseToolArgs(c.args) });
     }
-    // Hermes / Qwen style models sometimes emit tool calls inline as text.
-    if (!toolCalls.length && /<tool_call>/.test(text)) {
-      const extracted = extractInlineToolCalls(text);
+    // calls written into the text: the text protocol, or a model falling back to its own format
+    if (!toolCalls.length && req.tools.length && text) {
+      const extracted = extractTextToolCalls(text, req.tools.map((t) => t.name), { loose: textMode });
       if (extracted.calls.length) {
         text = extracted.text;
         toolCalls.push(...extracted.calls);
@@ -254,44 +283,12 @@ export class OpenAICompatProvider implements Provider {
   }
 }
 
-function parseArgs(raw: string): Record<string, unknown> {
-  if (!raw.trim()) return {};
-  try {
-    const v = JSON.parse(raw);
-    return typeof v === 'object' && v !== null ? v : { value: v };
-  } catch {
-    // tolerate trailing garbage / double-encoded JSON
-    const m = /\{[\s\S]*\}/.exec(raw);
-    if (m) {
-      try {
-        return JSON.parse(m[0]);
-      } catch {
-        /* fallthrough */
-      }
-    }
-    return { __raw: raw };
-  }
-}
-
+/** @deprecated kept for callers of the old helper; use extractTextToolCalls */
 export function extractInlineToolCalls(text: string): { text: string; calls: ToolCallPart[] } {
-  const calls: ToolCallPart[] = [];
-  const cleaned = text.replace(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g, (_, body: string) => {
-    try {
-      const j = JSON.parse(body) as { name?: string; arguments?: unknown; parameters?: unknown };
-      if (j.name) {
-        const args = typeof j.arguments === 'string' ? parseArgs(j.arguments) : ((j.arguments ?? j.parameters ?? {}) as Record<string, unknown>);
-        calls.push({ type: 'tool_call', id: `call_${newId()}`, name: j.name, input: args });
-        return '';
-      }
-    } catch {
-      /* leave text untouched */
-    }
-    return _;
-  });
-  return { text: cleaned.trim(), calls };
+  return extractTextToolCalls(text, [], { anyName: true });
 }
 
-export function toOpenAIMessages(system: string, messages: Message[], vision: boolean): OAIMessage[] {
+export function toOpenAIMessages(system: string, messages: Message[], vision: boolean, textTools = false): OAIMessage[] {
   const out: OAIMessage[] = [];
   if (system) out.push({ role: 'system', content: system });
   for (const m of messages) {
@@ -304,6 +301,10 @@ export function toOpenAIMessages(system: string, messages: Message[], vision: bo
       const text = m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('');
       const calls = m.parts.filter((p): p is ToolCallPart => p.type === 'tool_call');
       if (!text && !calls.length) continue;
+      if (textTools) {
+        out.push({ role: 'assistant', content: [text, ...calls.map((c) => renderToolCallText(c.name, c.input ?? {}))].filter(Boolean).join('\n\n') });
+        continue;
+      }
       const msg: OAIMessage = { role: 'assistant', content: text || null };
       if (calls.length) {
         msg.tool_calls = calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.input ?? {}) } }));
@@ -315,7 +316,8 @@ export function toOpenAIMessages(system: string, messages: Message[], vision: bo
     const images: { type: string; image_url: { url: string } }[] = [];
     const userContent: { type: string; [k: string]: unknown }[] = [];
     for (const p of m.parts) {
-      if (p.type === 'tool_result') {
+      if (p.type === 'tool_result' && textTools) userContent.push({ type: 'text', text: renderToolResultText(p.toolName, p.content || '(no output)', p.isError) });
+      else if (p.type === 'tool_result') {
         out.push({ role: 'tool', tool_call_id: p.toolCallId, content: p.content || '(no output)' });
         if (vision) for (const img of p.images ?? []) images.push({ type: 'image_url', image_url: { url: `data:${img.mediaType};base64,${img.data}` } });
       } else if (p.type === 'text' && p.text) userContent.push({ type: 'text', text: p.text });

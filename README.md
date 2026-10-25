@@ -85,8 +85,17 @@ offline demo model is only used when you pick it explicitly (`--model demo`), e.
 Anthropic (Claude Opus 5.5 by default, with prompt caching, adaptive thinking and server-side
 fallbacks), OpenAI, Google Gemini, OpenRouter, Groq, DeepSeek, Mistral, xAI, NVIDIA NIM, Nous
 Portal, Together, Fireworks, Cerebras, Moonshot, Z.ai, **Ollama** and **LM Studio** locally, and
-any OpenAI-compatible endpoint as a custom provider. Hermes-style models that emit inline
-`<tool_call>` tags just work. Switch models mid-conversation; use a cheaper model for subagents.
+any OpenAI-compatible endpoint as a custom provider. Switch models mid-conversation; use a
+cheaper model for subagents.
+
+**Built to get good work out of small, old and free models too.** The harness absorbs what weaker
+models get wrong: broken tool-call JSON is repaired; calls written as text in a model's own format
+(Hermes/Qwen `<tool_call>`, Llama `<function=…>`, Mistral `[TOOL_CALLS]`, XML, fenced JSON) are
+recognised; `bash`, `str_replace`, `file_path` and friends map onto the right tools and arguments;
+models without function calling get a text tool protocol automatically; small context windows
+get **lean mode** (core tools, compact prompt — ~70% less fixed context); `<think>` blocks are
+kept out of answers; replies that only announce an action get a nudge to actually do it; and
+every failed call comes back with the expected arguments and an example.
 
 ### It remembers and it improves
 - **Memory**: a curated `MEMORY.md` (what the agent learned) and `USER.md` (who you are), with

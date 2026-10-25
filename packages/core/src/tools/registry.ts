@@ -1,4 +1,4 @@
-import type { ToolSpec } from '../types.js';
+import type { JSONSchema, ToolSpec } from '../types.js';
 import type { Kronos } from '../runtime.js';
 import { TOOLSETS, type ToolDefinition, type ToolsetInfo } from './types.js';
 
@@ -43,8 +43,10 @@ export class ToolRegistry {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  specs(defs: ToolDefinition[]): ToolSpec[] {
-    return defs.map((d) => ({ name: d.name, description: d.description, parameters: d.parameters }));
+  /** `lean`: first sentences of each description and short argument notes — for small models. */
+  specs(defs: ToolDefinition[], lean = false): ToolSpec[] {
+    if (!lean) return defs.map((d) => ({ name: d.name, description: d.description, parameters: d.parameters }));
+    return defs.map((d) => ({ name: d.name, description: shortText(d.description, 220), parameters: shortSchema(d.parameters) }));
   }
 
   status(rt: Kronos, enabledToolsets: string[]): ToolsetStatus[] {
@@ -73,4 +75,25 @@ export class ToolRegistry {
       };
     });
   }
+}
+
+/** Leading sentences of `text` within `max` characters. */
+function shortText(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const sentences = flat.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [flat];
+  let out = '';
+  for (const s of sentences) {
+    if ((out + s).length > max) break;
+    out += s;
+  }
+  return (out || `${flat.slice(0, max - 1)}…`).trim();
+}
+
+function shortSchema(schema: JSONSchema): JSONSchema {
+  const out: JSONSchema = { ...schema };
+  if (typeof out.description === 'string') out.description = shortText(out.description, 90);
+  if (out.properties) out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, shortSchema(v)]));
+  if (out.items && typeof out.items === 'object') out.items = shortSchema(out.items as JSONSchema);
+  return out;
 }

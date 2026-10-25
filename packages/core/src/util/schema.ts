@@ -110,7 +110,7 @@ function check(schema: JSONSchema, v: unknown, path: string, errors: string[]): 
   }
 
   if (typeOf(v) === 'object') {
-    const obj = { ...(v as Record<string, unknown>) };
+    const obj = adoptAliases(schema, { ...(v as Record<string, unknown>) });
     for (const req of schema.required ?? []) {
       if (obj[req] === undefined || obj[req] === null) errors.push(`${path ? `${path}.` : ''}${req}: is required`);
     }
@@ -125,6 +125,44 @@ function check(schema: JSONSchema, v: unknown, path: string, errors: string[]): 
     return obj;
   }
   return v;
+}
+
+/**
+ * Argument names models use for our parameters — from other agents' tool sets (Claude Code,
+ * Cline, OpenHands, Codex …) that weaker models fall back to. Matched case- and punctuation-
+ * insensitively; only used when the real parameter is missing.
+ */
+const PARAM_ALIASES: Record<string, string[]> = {
+  path: ['filepath', 'file', 'filename', 'targetfile', 'target', 'absolutepath', 'relativepath', 'dir', 'directory', 'dirpath', 'folder', 'location', 'fullpath'],
+  command: ['cmd', 'script', 'shellcommand', 'bashcommand', 'commandline', 'commands', 'shell', 'bash', 'code'],
+  content: ['contents', 'text', 'body', 'data', 'filecontent', 'filetext', 'code', 'newcontent', 'source', 'filecontents'],
+  old_string: ['oldstr', 'oldtext', 'old', 'search', 'find', 'original', 'from', 'before', 'targettext', 'searchstring', 'findtext', 'oldcontent', 'oldcode'],
+  new_string: ['newstr', 'newtext', 'new', 'replace', 'replacement', 'to', 'after', 'replacestring', 'replacetext', 'newcontent', 'newcode'],
+  pattern: ['regex', 'query', 'search', 'glob', 'q', 'expression', 'searchterm', 'searchpattern', 'term'],
+  query: ['q', 'search', 'searchquery', 'term', 'keywords', 'question', 'text'],
+  url: ['link', 'uri', 'href', 'address', 'website', 'page'],
+  todos: ['items', 'tasks', 'list', 'todo', 'todolist', 'plan'],
+  question: ['prompt', 'message', 'text', 'query'],
+  patch: ['diff', 'patchtext', 'input'],
+  edits: ['changes', 'replacements', 'operations'],
+};
+
+const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Moves a misnamed argument (file_path, cmd, old_str, oldString …) onto the parameter it means. */
+function adoptAliases(schema: JSONSchema, obj: Record<string, unknown>): Record<string, unknown> {
+  const props = schema.properties ?? {};
+  const own = new Set(Object.keys(props));
+  for (const prop of own) {
+    if (obj[prop] !== undefined) continue;
+    const wanted = new Set([normKey(prop), ...(PARAM_ALIASES[prop] ?? [])]);
+    const key = Object.keys(obj).find((k) => !own.has(k) && obj[k] !== undefined && wanted.has(normKey(k)));
+    if (key) {
+      obj[prop] = obj[key];
+      delete obj[key];
+    }
+  }
+  return obj;
 }
 
 /** Build a compact human readable signature from a schema (for docs/help). */

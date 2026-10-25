@@ -27,6 +27,7 @@ kronos config path                 # where the file lives
 | `model.default` | `auto` | `provider:model` or an alias (`opus`, `sonnet`, `haiku`, `fable`, `gpt`, `gemini`, `hermes`, `grok`, `deepseek`, `kimi`, `local`, `demo`). `auto` picks the best configured provider; with none connected, chats are refused with a "connect a provider" prompt (the demo model is never picked automatically). |
 | `model.fallbacks` | `[]` | Tried in order when the primary fails with a non-retryable or exhausted error. |
 | `model.effort` | `medium` | `low` · `medium` (recommended) · `high` · `xhigh` · `max` · `codemaster` — reasoning effort; Codemaster = max effort plus a plan → parallel exploration → tests → independent review workflow. |
+| `model.toolMode` | `auto` | `native` function calling, `text` (tools described in the prompt and called as `<tool_call>` text — for models without function calling), or `auto`: native, switching a model to text when its provider rejects tools. |
 | `model.thinking` / `model.showThinking` | `true` / `true` | Extended thinking, and streaming its summaries to the UI. |
 | `model.maxOutputTokens` | `64000` | Upper bound per response (clamped to the model's limit). |
 | `model.temperature` | `null` | Only sent to models that accept sampling parameters. |
@@ -53,6 +54,12 @@ customProviders:
 
 Then use `vllm:qwen3-coder-480b` anywhere a model is accepted.
 
+**Small, local and free models.** Kronos adapts on its own (lean mode, text tool protocol, call
+repair — see `model.toolMode` and `agent.lean`), but give local servers enough context: Ollama
+serves a small window by default, which silently cuts off the start of the prompt. Start it with
+`OLLAMA_CONTEXT_LENGTH=32768 ollama serve` (or set `num_ctx` in a Modelfile); in LM Studio, raise
+the context length when loading the model.
+
 ## Agent
 
 | Key | Default | Description |
@@ -68,6 +75,7 @@ Then use `vllm:qwen3-coder-480b` anywhere a model is accepted.
 | `agent.compaction` | `{enabled: true, threshold: 0.8, keepRecentTurns: 2, clearToolResults: true, keepToolResults: 8}` | Past `threshold` of the context window: first clear the bodies of tool outputs older than the last `keepToolResults`; if that is not enough, summarise everything before the last `keepRecentTurns` user turns. Replaced messages are archived (searchable, visible under "Show earlier messages"). |
 | `agent.subagents` | `{maxConcurrent: 4, maxDepth: 2, maxIterations: 60}` | Delegation limits. |
 | `agent.nudges` | `{memoryEvery: 12, skillAfterToolCalls: 18}` | When to remind the agent to save memories / capture a skill. |
+| `agent.lean` | `auto` | `auto` · `on` · `off` — lean mode for small models: core tools only, short tool descriptions, a compact prompt (~70% less fixed context). `auto` = context windows up to 32k tokens. |
 | `agent.editDiagnostics` | `true` | Parse files right after write/edit/patch (TS/JS, JSON, YAML, Python) and report syntax errors in the same tool result. |
 | `agent.verifyBeforeFinish` | `true` | If a run changed files and never ran `verify` afterwards (and the project has checks), ask for one verification turn before finishing. |
 | `agent.budget` | `{maxTokens: 0, maxCostUsd: 0, maxMinutes: 0}` | Per-run limits (0 = none). A run that reaches one stops cleanly (`stopReason: budget`) and can be continued. |

@@ -69,6 +69,12 @@ export interface KronosConfig {
     subagent?: string | null;
     summary?: string | null;
     vision?: string | null;
+    /**
+     * how tools reach the model: 'native' function calling, 'text' (tools described in the prompt,
+     * calls written as text — for models without function calling), or 'auto': native, switching
+     * a model to text when its provider says it cannot take tools
+     */
+    toolMode: 'auto' | 'native' | 'text';
   };
   providers: Record<string, ProviderConfig>;
   customProviders: CustomProviderConfig[];
@@ -93,6 +99,11 @@ export interface KronosConfig {
     verifyBeforeFinish: boolean;
     /** parse files right after write/edit/patch and report syntax errors in the same tool result */
     editDiagnostics: boolean;
+    /**
+     * lean mode for small models: the core tools only, short tool descriptions and a compact
+     * prompt. 'auto' turns it on for context windows up to 32k tokens.
+     */
+    lean: 'auto' | 'on' | 'off';
     /** per-run limits (0 = unlimited); a run that reaches one stops cleanly and can be continued */
     budget: { maxTokens: number; maxCostUsd: number; maxMinutes: number };
   };
@@ -207,6 +218,7 @@ export function defaultConfig(): KronosConfig {
       subagent: null,
       summary: null,
       vision: null,
+      toolMode: 'auto',
     },
     providers: {
       anthropic: { apiKey: '${ANTHROPIC_API_KEY}', serverFallbacks: true, dropMismatchedThinking: true, promptCaching: true },
@@ -242,6 +254,7 @@ export function defaultConfig(): KronosConfig {
       nudges: { memoryEvery: 12, skillAfterToolCalls: 18 },
       verifyBeforeFinish: true,
       editDiagnostics: true,
+      lean: 'auto',
       budget: { maxTokens: 0, maxCostUsd: 0, maxMinutes: 0 },
     },
     toolsets: { enabled: [...ALL_TOOLSETS], disabled: [] },

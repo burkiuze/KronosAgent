@@ -226,6 +226,11 @@ export interface ChatRequest {
   temperature?: number;
   signal?: AbortSignal;
   sessionId?: string;
+  /**
+   * how tools reach the model: native function calling, or described in the prompt and called as
+   * text (models without function calling). 'auto' (default) uses native unless the model lacks it.
+   */
+  toolMode?: 'auto' | 'native' | 'text';
 }
 
 export type StreamEvent =

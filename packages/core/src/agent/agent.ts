@@ -30,6 +30,7 @@ import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
 import { LoopWatch } from './watchdog.js';
 import { formatSyntaxProblems, syntaxProblems } from '../tools/diagnostics.js';
+import { describeArgs, exampleArgs, resolveToolName, suggestTools } from '../providers/toolcalls.js';
 import { PermissionPolicy, primaryArg } from '../safety/permissions.js';
 import { validateInput } from '../util/schema.js';
 import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError } from '../util/misc.js';
@@ -39,6 +40,19 @@ import { NotConnectedError } from '../providers/errors.js';
 import { logger } from '../util/log.js';
 
 const log = logger('agent');
+
+/** The expected arguments and an example call, so a model can correct a malformed call by itself. */
+function usageHint(def: ToolDefinition): string {
+  const args = describeArgs(def.parameters, 80);
+  return `\nExpected arguments for ${def.name}:\n${args.map((a) => `- ${a}`).join('\n') || '- (none)'}\nExample: ${JSON.stringify({ name: def.name, arguments: exampleArgs(def.parameters) })}`;
+}
+
+/** A reply that ends by announcing an action instead of doing it (English and Turkish). */
+const ANNOUNCED_ACTION =
+  /(?:^|[.!?:\n]\s*)(?:(?:ok(?:ay)?|now|next|first|then|so),?\s+)?(?:let me|let's|i(?:'ll| will| am going to|'m going to| need to| should))\s+(?:now\s+|first\s+|then\s+)?(?:run|check|read|open|create|write|edit|update|modify|look|search|list|install|test|fix|implement|add|start|try|use|call|execute|inspect|examine|verify|make|change|apply|build|compile|grep|fetch|explore|review|find)\b[^.!?\n]{0,160}[.:…]?\s*$|\S+(?:acağım|eceğim)(?:\s+\S+){0,2}[.:…!]?\s*$/i;
+
+/** The tool set of lean mode: enough to do real work, small enough for a small model to use well. */
+const LEAN_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'shell', 'list_dir', 'grep', 'glob', 'todo_write', 'web_search', 'web_fetch', 'memory', 'ask_user', 'verify', 'exit_plan_mode']);
 
 /** tools whose results get a syntax check of the files they changed */
 const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);
@@ -130,6 +144,8 @@ export class Agent {
   /** files changed by write tools since the last verify call in this run */
   private editsSinceVerify = 0;
   private verifyNudged = false;
+  /** weak-model nudges used in this run (empty replies, announced-but-not-called actions) */
+  private replyNudges = { empty: 0, intent: 0 };
   private lastVerify: boolean | undefined;
   private runSkills = new Set<string>();
   private skillUses = new Map<string, number>();
@@ -203,7 +219,13 @@ export class Agent {
   // and the conversation append-only for providers that bind reasoning to it.
   // ---------------------------------------------------------------------------
 
-  private resolveTools(): ToolDefinition[] {
+  /** Small context windows get lean mode: core tools, short descriptions, a compact prompt. */
+  private leanFor(model: ModelInfo): boolean {
+    const mode = this.rt.config.agent.lean;
+    return mode === 'on' || (mode !== 'off' && model.contextWindow <= 32_768);
+  }
+
+  private resolveTools(lean = false): ToolDefinition[] {
     const cfg = this.rt.config;
     const enabled = cfg.toolsets.enabled.filter((t) => !cfg.toolsets.disabled.includes(t));
     const only = this.opts.toolFilter?.only;
@@ -211,18 +233,21 @@ export class Agent {
     if (this.depth > 0) exclude.push('ask_user', 'exit_plan_mode');
     if (this.depth >= cfg.agent.subagents.maxDepth) exclude.push('delegate');
     if (!this.opts.team) exclude.push('team_board');
-    return this.rt.tools.resolve(enabled, this.rt, { only, exclude });
+    const tools = this.rt.tools.resolve(enabled, this.rt, { only, exclude });
+    return lean && !only ? tools.filter((t) => LEAN_TOOLS.has(t.name)) : tools;
   }
 
   private ensureContext(model: ModelInfo): void {
-    if (this.session.systemPrompt && this.session.toolNames) {
+    const lean = this.leanFor(model);
+    // the frozen context is reused unless the model moved in or out of lean mode
+    if (this.session.systemPrompt && this.session.toolNames && Boolean(this.session.meta?.lean) === lean) {
       const names = new Set(this.session.toolNames);
       this.tools = this.rt.tools.all().filter((t) => names.has(t.name) && (!t.available || t.available(this.rt) === null));
-      this.toolSpecs = this.rt.tools.specs(this.tools);
+      this.toolSpecs = this.rt.tools.specs(this.tools, lean);
       return;
     }
-    this.tools = this.resolveTools();
-    this.toolSpecs = this.rt.tools.specs(this.tools);
+    this.tools = this.resolveTools(lean);
+    this.toolSpecs = this.rt.tools.specs(this.tools, lean);
     const cfg = this.rt.config;
     const preloaded = (this.opts.preloadSkills ?? [])
       .map((name) => {
@@ -254,8 +279,9 @@ export class Agent {
       language: cfg.agent.language,
       checks: detectProjectChecks(this.session.cwd),
       team: this.opts.team ? { member: this.opts.team.member, teammates: this.opts.team.board.members.filter((m) => m !== this.opts.team!.member) } : undefined,
+      lean,
     });
-    this.saveSession({ systemPrompt: prompt, toolNames: this.tools.map((t) => t.name) });
+    this.saveSession({ systemPrompt: prompt, toolNames: this.tools.map((t) => t.name), meta: { lean } });
   }
 
   /** Rebuild the frozen context (new memory/skills/tools) — starts a new cache prefix. */
@@ -458,6 +484,7 @@ export class Agent {
 
     this.editsSinceVerify = 0;
     this.verifyNudged = false;
+    this.replyNudges = { empty: 0, intent: 0 };
     this.lastVerify = undefined;
     this.runSkills.clear();
     let runUsage = emptyUsage();
@@ -561,6 +588,7 @@ export class Agent {
           thinking: cfg.model.thinking,
           showThinking: cfg.model.showThinking,
           temperature: cfg.model.temperature ?? undefined,
+          toolMode: cfg.model.toolMode,
           signal,
           sessionId: this.session.id,
         };
@@ -597,6 +625,9 @@ export class Agent {
         runUsage = addUsage(runUsage, usage);
         this.saveSession({ usage: addUsage(this.session.usage ?? emptyUsage(), usage) });
         const toolCalls = res.parts.filter((p): p is ToolCallPart => p.type === 'tool_call');
+        // `bash`, `str_replace`, `functions.read_file` …: record the call under the tool it meant
+        const toolNames = this.tools.map((t) => t.name);
+        for (const c of toolCalls) c.name = resolveToolName(c.name, toolNames) ?? c.name;
         this.rt.sessions.logUsage({
           ts: Date.now(), sessionId: this.session.id, model: res.modelInfo.ref, source: this.session.source,
           inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens,
@@ -641,6 +672,11 @@ export class Agent {
         }
         if (res.stopReason === 'pause_turn') continue;
         if (!toolCalls.length) {
+          const nudge = res.stopReason === 'end_turn' && iter < maxIter && this.tools.length ? this.replyNudge(textOf(res.parts)) : undefined;
+          if (nudge) {
+            this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: nudge }], createdAt: Date.now(), meta: { kind: 'note' } }]);
+            continue;
+          }
           if (res.stopReason !== 'max_tokens' && iter < maxIter && this.shouldVerifyBeforeFinish()) {
             // verification is a property of the harness, not a request in the prompt
             this.verifyNudged = true;
@@ -717,6 +753,24 @@ export class Agent {
     return this.finish(runId, started, finalText, stop, runUsage, error, toolCallCount);
   }
 
+  /**
+   * Weaker models end turns in two ways that leave the task undone: an empty reply, or a reply that
+   * announces the next action ("Let me run the tests.") without calling a tool. One short nudge each
+   * gets them going again; a final answer is never blocked twice.
+   */
+  private replyNudge(text: string): string | undefined {
+    const reply = text.trim();
+    if (!reply && this.replyNudges.empty < 2) {
+      this.replyNudges.empty++;
+      return 'Your last reply was empty. Continue the task: call the next tool, or write your final answer if the task is done.';
+    }
+    if (reply && this.replyNudges.intent < 1 && ANNOUNCED_ACTION.test(reply.slice(-240))) {
+      this.replyNudges.intent++;
+      return 'You described your next step but did not call a tool, so nothing happened. Call the tool now. If the task is already done, give your final answer instead.';
+    }
+    return undefined;
+  }
+
   private shouldVerifyBeforeFinish(): boolean {
     if (this.verifyNudged || this.editsSinceVerify === 0 || this.mode === 'plan') return false;
     if (!this.rt.config.agent.verifyBeforeFinish || !this.toolSpecs.some((t) => t.name === 'verify')) return false;
@@ -786,12 +840,12 @@ export class Agent {
       const def = known.has(call.name) ? this.rt.tools.get(call.name) : undefined;
       if (!def) {
         this.emit({ type: 'tool_call', runId, id: call.id, name: call.name, input: call.input, summary: call.name, toolset: 'unknown' });
-        fail(`Unknown tool "${call.name}". Available tools: ${[...known].join(', ')}`);
+        fail(`Unknown tool "${call.name}". Did you mean ${suggestTools(call.name, known).map((n) => `"${n}"`).join(' or ')}? Available tools: ${[...known].join(', ')}`);
         continue;
       }
       if ('__raw' in call.input) {
         this.emit({ type: 'tool_call', runId, id: call.id, name: call.name, input: call.input, summary: call.name, toolset: def.toolset });
-        fail(`INVALID_JSON: the tool arguments were not valid JSON: ${truncate(String(call.input.__raw), 300)}`);
+        fail(`INVALID_JSON: the tool arguments were not valid JSON: ${truncate(String(call.input.__raw), 300)}${usageHint(def)}`);
         continue;
       }
       const v = validateInput(def.parameters, call.input);
@@ -804,7 +858,7 @@ export class Agent {
       }
       this.emit({ type: 'tool_call', runId, id: call.id, name: call.name, input, summary, toolset: def.toolset });
       if (!v.ok) {
-        fail(`Invalid arguments for ${call.name}: ${v.errors.join('; ')}`);
+        fail(`Invalid arguments for ${call.name}: ${v.errors.join('; ')}${usageHint(def)}`);
         continue;
       }
       if (this.rt.hooks.has('preToolUse')) {
