@@ -18,19 +18,21 @@
     "electron-updater": "^6.8.11"
   },
   "devDependencies": {
-    "electron": "^38.8.6",
+    "electron": "38.8.6",
     "electron-builder": "^26.18.0",
     "esbuild": "^0.25.12"
   },
   "build": {
     "appId": "ai.kronos.desktop",
     "productName": "Kronos",
+    "executableName": "kronos",
     "directories": {
       "output": "release",
       "buildResources": "build"
     },
     "files": [
       "dist/**",
+      "!dist/**/*.map",
       "web/**",
       "package.json"
     ],
