@@ -26,6 +26,7 @@ import {
   parseSchedule,
   readYamlFile,
   writeYamlFile,
+  runProcess,
 } from '@kronos/core';
 import { HttpError, Router, sendFile, mimeFor } from './http.js';
 import type { Gateway } from './server.js';
@@ -562,6 +563,14 @@ export function buildApi(gw: Gateway): Router {
   // ---------------------------------------------------------------- misc
   r.get('/api/fs/home', () => ({ home: homedir(), cwd: rt().workspace() }));
   r.get('/api/fs/resolve', (req) => ({ path: resolve(resolvePath(req.query.get('path') ?? '.', rt().cwd)) }));
+  r.get('/api/git', async (req) => {
+    const cwd = resolve(resolvePath(req.query.get('path') ?? '.', rt().cwd));
+    if (!existsSync(cwd)) return { branch: null, dirty: false };
+    const b = await runProcess('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 4000 }).catch(() => null);
+    if (!b || b.exitCode !== 0) return { branch: null, dirty: false };
+    const st = await runProcess('git', ['status', '--porcelain'], { cwd, timeoutMs: 4000 }).catch(() => null);
+    return { branch: b.stdout.trim(), dirty: Boolean(st?.stdout.trim()) };
+  });
   r.get('/api/transcript/:id', (req) => rt().sessions.messages(req.params.id as string).map((m) => ({ role: m.role, text: messagePlainText(m) })));
 
   return r;

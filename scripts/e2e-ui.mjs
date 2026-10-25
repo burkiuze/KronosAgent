@@ -1,0 +1,134 @@
+#!/usr/bin/env node
+// End-to-end smoke test of the web UI: boots a gateway on a throwaway home with the offline
+// demo model, drives the UI with Playwright (chromium) and fails on any page error.
+// Usage: npm run build && npm run build:web && npm run test:e2e   (SCREENSHOTS=dir to keep shots)
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { Kronos } from '@kronos/core';
+import { Gateway } from '@kronos/gateway';
+
+// CommonJS resolution so a globally installed playwright (NODE_PATH) works too
+const { chromium } = createRequire(import.meta.url)('playwright');
+
+for (const k of Object.keys(process.env)) if (/_API_KEY$|^ANTHROPIC_AUTH_TOKEN$/.test(k)) delete process.env[k];
+const home = mkdtempSync(join(tmpdir(), 'kronos-e2e-home-'));
+const ws = mkdtempSync(join(tmpdir(), 'kronos-e2e-ws-'));
+writeFileSync(join(ws, 'README.md'), '# e2e workspace\n\nHello from the Kronos e2e test.\n');
+writeFileSync(join(ws, 'app.ts'), 'export const answer = 42;\n');
+const shots = process.env.SCREENSHOTS;
+if (shots) mkdirSync(shots, { recursive: true });
+
+const rt = await Kronos.create({
+  home,
+  cwd: ws,
+  connectMcp: false,
+  logLevel: 'silent',
+  overrides: { model: { default: 'kronos:demo' }, safety: { mode: 'yolo' }, skills: { claudeCompat: false } },
+});
+const gw = await Gateway.start(rt, { port: 0, host: '127.0.0.1', platforms: false, cron: false, token: 'e2e-token', quiet: true });
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const errors = [];
+page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+page.on('console', (m) => m.type() === 'error' && !/favicon|ERR_ABORTED/.test(m.text()) && errors.push(`console: ${m.text()}`));
+
+let step = 0;
+async function check(name, fn) {
+  step++;
+  const started = Date.now();
+  try {
+    await fn();
+    console.log(`  ✓ ${name} (${Date.now() - started}ms)`);
+  } catch (e) {
+    console.log(`  ✗ ${name}\n    ${e.message.split('\n')[0]}`);
+    if (shots) await page.screenshot({ path: join(shots, `fail-${step}.png`) }).catch(() => undefined);
+    throw e;
+  }
+  if (shots) await page.screenshot({ path: join(shots, `${String(step).padStart(2, '0')}-${name.replace(/\W+/g, '-')}.png`) });
+}
+
+const composer = () => page.locator('.composer textarea');
+async function send(text) {
+  await composer().fill(text);
+  await composer().press('Enter');
+}
+async function nav(label) {
+  await page.locator('.nav-item', { hasText: label }).first().click();
+}
+
+let failed = false;
+try {
+  console.log(`Kronos e2e — ${gw.url}`);
+  await check('loads the app', async () => {
+    await page.goto(`${gw.url}/?token=e2e-token`);
+    await page.locator('.welcome').waitFor({ timeout: 15000 });
+  });
+  await check('chats with the demo model', async () => {
+    await send('Hello Kronos!');
+    await page.locator('.assistant-turn').filter({ hasText: /Kronos/ }).first().waitFor({ timeout: 15000 });
+    await page.waitForFunction(() => !document.querySelector('.assistant-turn.live'), null, { timeout: 15000 });
+  });
+  await check('runs tools and renders tool cards', async () => {
+    await send('list the files here');
+    await page.locator('.tool-card').first().waitFor({ timeout: 15000 });
+    await page.locator('.assistant-turn', { hasText: 'README.md' }).first().waitFor({ timeout: 15000 });
+  });
+  await check('session appears in the sidebar', async () => {
+    await page.locator('.session-item').first().waitFor({ timeout: 10000 });
+  });
+  await check('plans with a todo list', async () => {
+    await send('make a plan to refactor app.ts');
+    await page.locator('.todo-list, .todos, .todo-float').first().waitFor({ timeout: 15000 });
+  });
+  for (const [label, sel] of [
+    ['Skills', '.page'],
+    ['Messaging', '.page'],
+    ['Artifacts', '.page'],
+    ['Automations', '.page'],
+    ['Memory', '.page'],
+    ['Insights', '.page'],
+  ]) {
+    await check(`opens ${label}`, async () => {
+      await nav(label);
+      await page.locator(sel).first().waitFor({ timeout: 10000 });
+    });
+  }
+  await check('opens settings and switches theme', async () => {
+    await page.keyboard.press('Control+,');
+    await page.locator('.settings').first().waitFor({ timeout: 10000 });
+    await page.locator('.settings-nav-item', { hasText: /Appearance|Görünüm/ }).click();
+    await page.locator('.theme-card, .theme-swatch').nth(2).click();
+    await page.waitForFunction(() => document.documentElement.dataset.theme && document.documentElement.dataset.theme !== 'kronos', null, { timeout: 5000 });
+    await page.keyboard.press('Escape');
+  });
+  await check('command palette', async () => {
+    await page.keyboard.press('Control+k');
+    await page.locator('.palette input').waitFor();
+    await page.locator('.palette input').fill('memory');
+    await page.locator('.palette-item').first().waitFor();
+    await page.keyboard.press('Escape');
+  });
+  await check('files panel', async () => {
+    await page.keyboard.press('Control+j');
+    await page.locator('.right-panel').waitFor({ timeout: 10000 });
+    await page.locator('.right-panel', { hasText: 'README.md' }).waitFor({ timeout: 10000 });
+  });
+  await check('terminal panel', async () => {
+    await page.locator('.right-tabs button[title="Terminal"]').click();
+    await page.locator('.xterm').waitFor({ timeout: 10000 });
+  });
+  if (errors.length) throw new Error(`browser errors:\n${errors.join('\n')}`);
+  console.log(`\nAll ${step} UI checks passed.`);
+} catch (e) {
+  failed = true;
+  if (errors.length) console.log(`\nBrowser errors:\n  ${errors.join('\n  ')}`);
+  console.error(`\nE2E failed: ${e.message}`);
+} finally {
+  await browser.close();
+  await gw.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(ws, { recursive: true, force: true });
+}
+process.exit(failed ? 1 : 0);

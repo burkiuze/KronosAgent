@@ -21,6 +21,8 @@ export interface ChatInput {
   source?: string;
   /** interrupt the current run instead of queueing */
   interrupt?: boolean;
+  /** called with the session id before the run starts (subscribe the caller) */
+  onSession?: (sessionId: string) => void;
 }
 
 interface Queued extends ChatInput {
@@ -155,6 +157,7 @@ export class Hub {
       });
       sessionId = s.id;
     }
+    input.onSession?.(sessionId);
     const agent = rt.agent(sessionId, { surface: (input.source ?? 'desktop').split(':')[0], onPermission: this.uiPermission, onClarify: this.uiClarify });
     if (input.mode && input.mode !== agent.mode) agent.setMode(input.mode);
     if (input.model) agent.setModel(input.model);

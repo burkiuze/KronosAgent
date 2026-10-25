@@ -282,6 +282,7 @@ export class Gateway {
           cwd: msg.cwd as string | undefined,
           interrupt: Boolean(msg.interrupt),
           source: 'desktop',
+          onSession: (sid) => client.subscriptions.add(sid),
         });
         client.subscriptions.add(r.sessionId);
         client.send({ type: 'chat_ack', requestId: msg.requestId, sessionId: r.sessionId, queued: r.queued });

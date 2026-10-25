@@ -10,3 +10,6 @@ release/
 coverage/
 .vite/
 .kronos-test-*/
+apps/desktop/web/
+apps/desktop/skills/
+apps/desktop/build/

@@ -1,15 +1,18 @@
 {
   "name": "@kronos/desktop",
+  "productName": "Kronos",
   "version": "1.0.0",
   "private": true,
-  "description": "KRONOS Desktop — native shell for Kronos Agent.",
+  "description": "KRONOS Desktop \u2014 native shell for Kronos Agent.",
   "license": "Apache-2.0",
   "author": "Kronos Agent contributors",
   "main": "dist/main.cjs",
   "scripts": {
     "build": "node build.mjs",
+    "typecheck": "tsc -p .",
     "start": "npm run build && electron .",
-    "dist": "npm run build && electron-builder --publish never"
+    "dist": "npm run build && electron-builder --publish never",
+    "release": "npm run build && electron-builder --publish always"
   },
   "dependencies": {
     "electron-updater": "^6.8.11"
@@ -22,11 +25,72 @@
   "build": {
     "appId": "ai.kronos.desktop",
     "productName": "Kronos",
-    "directories": { "output": "release" },
-    "files": ["dist/**", "web/**", "skills/**", "package.json"],
-    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
-    "win": { "target": ["nsis"] },
-    "linux": { "target": ["AppImage", "deb"], "category": "Development" },
-    "publish": [{ "provider": "github", "owner": "burkiuze", "repo": "KronosAgent" }]
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "web/**",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Kronos uses the microphone for voice input."
+      }
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "burkiuze",
+        "repo": "KronosAgent"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "skills",
+        "to": "skills"
+      },
+      {
+        "from": "build",
+        "to": "build",
+        "filter": [
+          "*.png"
+        ]
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Kronos",
+        "schemes": [
+          "kronos"
+        ]
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
