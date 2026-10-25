@@ -248,6 +248,9 @@ export class Gateway {
       send: (msg) => {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
       },
+      sendRaw: (data) => {
+        if (ws.readyState === ws.OPEN) ws.send(data);
+      },
     };
     this.hub.addClient(client);
     const model = this.rt.providers.resolve();

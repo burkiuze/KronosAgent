@@ -873,9 +873,16 @@ export class Agent {
   // Context management
   // ---------------------------------------------------------------------------
 
+  /** tokens of the frozen system prompt + tool schemas, recomputed only when they change */
+  private fixedTokens = { prompt: '', specs: [] as ToolSpec[], tokens: 0 };
+
   contextUsage(): { tokens: number; window: number; percent: number } {
     const model = this.rt.providers.resolve(this.session.model || undefined);
-    const est = estimateMessagesTokens(this.messages) + estimateTokens(this.session.systemPrompt ?? '') + estimateTokens(JSON.stringify(this.toolSpecs));
+    const prompt = this.session.systemPrompt ?? '';
+    if (this.fixedTokens.prompt !== prompt || this.fixedTokens.specs !== this.toolSpecs) {
+      this.fixedTokens = { prompt, specs: this.toolSpecs, tokens: estimateTokens(prompt) + estimateTokens(JSON.stringify(this.toolSpecs)) };
+    }
+    const est = estimateMessagesTokens(this.messages) + this.fixedTokens.tokens;
     const tokens = Math.max(est, this.lastContextTokens);
     return { tokens, window: model.contextWindow, percent: Math.round((tokens / model.contextWindow) * 100) };
   }

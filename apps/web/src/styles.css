@@ -834,6 +834,17 @@ kbd {
   scroll-behavior: auto;
 }
 
+/* only the bottom sentinel may be a scroll anchor: while it is in view the browser keeps it
+   there as content above grows (stick-to-bottom without JS); scrolled up, nothing moves */
+.thread > * {
+  overflow-anchor: none;
+}
+
+.scroll-anchor {
+  overflow-anchor: auto;
+  height: 1px;
+}
+
 .thread {
   max-width: 820px;
   margin: 0 auto;
@@ -2095,6 +2106,10 @@ kbd {
 
 .kronos-mark {
   flex: none;
+}
+
+.kronos-mark.busy {
+  animation: breathe 1.6s ease-in-out infinite;
 }
 
 /* ---------------------------------------------------------------- right panel */

@@ -1,11 +1,14 @@
 import type { AgentEvent, ClarifyRequest, FilePart, ImagePart, Kronos, PermissionDecision, PermissionMode, PermissionRequest, RuntimeEvent } from '@kronos/core';
 import { newId, errorMessage, logger } from '@kronos/core';
+import { DeltaCoalescer } from './coalesce.js';
 
 const log = logger('hub');
 
 export interface HubClient {
   id: string;
   send(msg: unknown): void;
+  /** send an already-encoded message (broadcasts encode once for all clients) */
+  sendRaw?(data: string): void;
   subscriptions: Set<string>;
 }
 
@@ -55,12 +58,14 @@ export class Hub {
   private pendingAsks = new Map<string, ClarifyRequest>();
   private off?: () => void;
   private rt!: Kronos;
+  private deltas = new DeltaCoalescer((sessionId, event) => this.dispatchAgentEvent(sessionId, event));
 
   constructor(rt: Kronos) {
     this.attach(rt);
   }
 
   attach(rt: Kronos): void {
+    this.deltas.flushAll();
     this.off?.();
     this.rt = rt;
     this.off = rt.events.on((e) => this.onRuntimeEvent(e));
@@ -79,10 +84,12 @@ export class Hub {
   }
 
   broadcast(msg: unknown, filter?: (c: HubClient) => boolean): void {
+    let data: string | undefined;
     for (const c of this.clients.values()) {
       if (filter && !filter(c)) continue;
       try {
-        c.send(msg);
+        if (c.sendRaw) c.sendRaw((data ??= JSON.stringify(msg)));
+        else c.send(msg);
       } catch (e) {
         log.debug('send failed', e);
       }
@@ -91,25 +98,9 @@ export class Hub {
 
   private onRuntimeEvent(e: RuntimeEvent): void {
     switch (e.type) {
-      case 'agent': {
-        const ev = e.event;
-        if (ev.type === 'run_start') {
-          const s = this.rt.sessions.get(e.sessionId);
-          this.running.set(e.sessionId, { sessionId: e.sessionId, title: s?.title ?? '', startedAt: Date.now(), runId: ev.runId, source: s?.source ?? '' });
-          this.broadcastStatus();
-        }
-        if (ev.type === 'run_end') {
-          this.running.delete(e.sessionId);
-          this.broadcastStatus();
-        }
-        if (ev.type === 'permission_request') this.pendingPerms.set(ev.request.requestId, ev.request);
-        if (ev.type === 'permission_resolved') this.pendingPerms.delete(ev.requestId);
-        if (ev.type === 'clarify_request') this.pendingAsks.set(ev.request.requestId, ev.request);
-        if (ev.type === 'clarify_resolved') this.pendingAsks.delete(ev.requestId);
-        const global = GLOBAL_EVENTS.has(ev.type);
-        this.broadcast({ type: 'event', sessionId: e.sessionId, event: ev }, (c) => global || c.subscriptions.has(e.sessionId) || c.subscriptions.has('*'));
+      case 'agent':
+        this.deltas.push(e.sessionId, e.event);
         break;
-      }
       case 'session_updated':
         this.broadcast({ type: 'session_updated', sessionId: e.sessionId });
         break;
@@ -123,6 +114,25 @@ export class Hub {
         this.broadcast({ type: 'artifact_added', artifactId: e.artifactId });
         break;
     }
+  }
+
+  /** Agent events in order, after streaming deltas were coalesced. */
+  private dispatchAgentEvent(sessionId: string, ev: AgentEvent): void {
+    if (ev.type === 'run_start') {
+      const s = this.rt.sessions.get(sessionId);
+      this.running.set(sessionId, { sessionId: sessionId, title: s?.title ?? '', startedAt: Date.now(), runId: ev.runId, source: s?.source ?? '' });
+      this.broadcastStatus();
+    }
+    if (ev.type === 'run_end') {
+      this.running.delete(sessionId);
+      this.broadcastStatus();
+    }
+    if (ev.type === 'permission_request') this.pendingPerms.set(ev.request.requestId, ev.request);
+    if (ev.type === 'permission_resolved') this.pendingPerms.delete(ev.requestId);
+    if (ev.type === 'clarify_request') this.pendingAsks.set(ev.request.requestId, ev.request);
+    if (ev.type === 'clarify_resolved') this.pendingAsks.delete(ev.requestId);
+    const global = GLOBAL_EVENTS.has(ev.type);
+    this.broadcast({ type: 'event', sessionId: sessionId, event: ev }, (c) => global || c.subscriptions.has(sessionId) || c.subscriptions.has('*'));
   }
 
   runningList(): RunningInfo[] {

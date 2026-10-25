@@ -69,31 +69,73 @@ function drawSprite(ctx: CanvasRenderingContext2D, rows: string[], x: number, y:
   ctx.globalAlpha = 1;
 }
 
+/** Pre-rendered layers: drawn once per size instead of on every frame. */
+interface Layers {
+  dpr: number;
+  /** purple field + glow behind the mascot */
+  bg: HTMLCanvasElement;
+  sprites: Map<string, HTMLCanvasElement>;
+}
+
+function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.ceil(w));
+  c.height = Math.max(1, Math.ceil(h));
+  const ctx = c.getContext('2d') as CanvasRenderingContext2D;
+  ctx.imageSmoothingEnabled = false;
+  return [c, ctx];
+}
+
+function makeLayers(w: number, h: number, dpr: number): Layers {
+  const [bg, b] = makeCanvas(w * dpr, h * dpr);
+  b.scale(dpr, dpr);
+  const mx = w - 44;
+  const my = h / 2;
+  const g = b.createLinearGradient(0, 0, w, 0);
+  g.addColorStop(0, '#22163f');
+  g.addColorStop(0.6, '#36256d');
+  g.addColorStop(1, '#5236ad');
+  b.fillStyle = g;
+  b.fillRect(0, 0, w, h);
+  const glow = b.createRadialGradient(mx, my, 4, mx, my, 70);
+  glow.addColorStop(0, 'rgba(167,139,250,0.55)');
+  glow.addColorStop(1, 'rgba(167,139,250,0)');
+  b.fillStyle = glow;
+  b.fillRect(mx - 80, 0, 160, h);
+  return { dpr, bg, sprites: new Map() };
+}
+
+/** A sprite at a given cell size, rendered once and then blitted. */
+function blitSprite(ctx: CanvasRenderingContext2D, layers: Layers, key: string, rows: string[], x: number, y: number, px: number, alpha = 1): void {
+  const id = `${key}@${px}`;
+  let img = layers.sprites.get(id);
+  if (!img) {
+    const cols = Math.max(...rows.map((r) => r.length));
+    const [c, sctx] = makeCanvas(cols * px * layers.dpr + 1, rows.length * px * layers.dpr + 1);
+    sctx.scale(layers.dpr, layers.dpr);
+    drawSprite(sctx, rows, 0, 0, px);
+    layers.sprites.set(id, (img = c));
+  }
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, Math.round(x), Math.round(y), img.width / layers.dpr, img.height / layers.dpr);
+  ctx.globalAlpha = 1;
+}
+
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 /** Stable per-cell brightness jitter in [0, 1), so the grid shimmers like the reference. */
 const grain = (c: number, r: number) => (((c * 73856093) ^ (r * 19349663)) >>> 0) % 997 / 997;
 const easeOutBack = (v: number) => 1 + 2.4 * (v - 1) ** 3 + 1.4 * (v - 1) ** 2;
 
 /** One frame of the banner at time `t` seconds after it was switched on. */
-function drawFrame(ctx: CanvasRenderingContext2D, w: number, h: number, t: number): void {
+function drawFrame(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, layers: Layers): void {
   ctx.clearRect(0, 0, w, h);
   const appear = clamp01(t / 0.35);
   const mx = w - 44;
   const my = h / 2;
 
-  // purple field + glow behind the mascot
+  // purple field + glow behind the mascot (pre-rendered)
   ctx.globalAlpha = appear;
-  const g = ctx.createLinearGradient(0, 0, w, 0);
-  g.addColorStop(0, '#22163f');
-  g.addColorStop(0.6, '#36256d');
-  g.addColorStop(1, '#5236ad');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
-  const glow = ctx.createRadialGradient(mx, my, 4, mx, my, 70);
-  glow.addColorStop(0, 'rgba(167,139,250,0.55)');
-  glow.addColorStop(1, 'rgba(167,139,250,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(mx - 80, 0, 160, h);
+  ctx.drawImage(layers.bg, 0, 0, w, h);
   ctx.globalAlpha = 1;
 
   // stair-stepped pixel waves rolling left from the mascot. Cells are bucketed by opacity and
@@ -149,14 +191,16 @@ function drawFrame(ctx: CanvasRenderingContext2D, w: number, h: number, t: numbe
   const bob = playing ? Math.round(Math.sin(t * 7.5)) : 0;
   const sx = mx - (16 * px) / 2;
   const sy = my - (16 * px) / 2 + bob;
-  drawSprite(ctx, SPRITE, sx, sy, px);
+  // while popping in the scale changes every frame, so draw directly; afterwards blit the cached sprite
+  if (pop < 0.999 || pop > 1.001) drawSprite(ctx, SPRITE, sx, sy, px);
+  else blitSprite(ctx, layers, 'titan', SPRITE, sx, sy, px);
   if (playing) {
     const slide = clamp01((t - 0.6) / 0.25);
     const kx = sx + 2 * px + (1 - slide) * 10;
     const ky = sy + 11 * px;
-    drawSprite(ctx, KEYTAR, kx, ky, px, slide);
+    blitSprite(ctx, layers, 'keytar', KEYTAR, kx, ky, px, slide);
     const pose = Math.floor(t / 0.22) % 2;
-    drawSprite(ctx, HANDS[pose] as string[], kx, ky + 1.5 * px, px, slide);
+    blitSprite(ctx, layers, `hands${pose}`, HANDS[pose] as string[], kx, ky + 1.5 * px, px, slide);
     // notes float up and fade
     for (let i = 0; i < 4; i++) {
       const since = t - 0.9 - i * 0.37;
@@ -166,7 +210,7 @@ function drawFrame(ctx: CanvasRenderingContext2D, w: number, h: number, t: numbe
       const seed = (Math.floor(since / 1.48) * 7 + i * 13) % 5;
       const nx = sx + 14 * px + seed * 3 + life * 8;
       const ny = sy + 2 * px - life * 18;
-      drawSprite(ctx, NOTE, nx, ny, 1.5, clamp01(1 - life / 1.2));
+      blitSprite(ctx, layers, 'note', NOTE, nx, ny, 1.5, clamp01(1 - life / 1.2));
     }
   }
 }
@@ -180,6 +224,7 @@ function CodemasterCanvas() {
     if (!canvas || !ctx) return;
     let w = 0;
     let h = 0;
+    let layers: Layers;
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -189,12 +234,13 @@ function CodemasterCanvas() {
       canvas.height = Math.max(1, Math.round(h * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.imageSmoothingEnabled = false;
+      layers = makeLayers(w, h, dpr);
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      drawFrame(ctx, w, h, 2.4);
+      drawFrame(ctx, w, h, 2.4, layers!);
       return () => ro.disconnect();
     }
     const start = performance.now();
@@ -204,7 +250,7 @@ function CodemasterCanvas() {
       raf = requestAnimationFrame(tick);
       if (now - last < 33) return; // ~30 fps is plenty for pixel art
       last = now;
-      drawFrame(ctx, w, h, (now - start) / 1000);
+      drawFrame(ctx, w, h, (now - start) / 1000, layers);
     };
     raf = requestAnimationFrame(tick);
     return () => {

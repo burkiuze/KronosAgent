@@ -20,8 +20,9 @@ by roughly ±25 % between runs.
 | Idle, welcome screen — renderer CPU | 13.7 % | 0.2–0.4 % |
 | Idle, open chat — main-thread time | 101 ms/s | ~1 ms/s |
 | Idle, open chat — renderer CPU | 16.2 % | 0.2–0.5 % |
-| Streaming an 8 KB Markdown answer (~330 deltas/s) — main thread | 982 ms/s (saturated) | 210–360 ms/s |
-| … renderer CPU | 124 % | 36–58 % |
+| Streaming an 8 KB Markdown answer (~330 deltas/s) — main thread | 982 ms/s (saturated) | 150–190 ms/s |
+| … layout passes | 180 per s | 31 per s (one per update) |
+| … renderer CPU | 124 % | 30–33 % |
 | … time to show a 4.1 s stream | 8.1 s (fell behind) | 4.4 s (real time) |
 | … JS heap after GC | 12.9 MB | 6.2 MB |
 
@@ -31,7 +32,10 @@ by roughly ±25 % between runs.
 |---|---|---|
 | RSS after 20 turns | 177 MB | 85–90 MB |
 | Heap after 20 turns (after GC) | 51 MB | 12–14 MB |
-| CPU while idle | ~21 ms/s | ~0.5–1 ms/s |
+| CPU while idle | ~21 ms/s | ~0.4–1 ms/s |
+| CPU while streaming a fast model (~460 deltas/s, one UI client) | 131–145 ms/s | ~104 ms/s |
+| WebSocket frames for one 21 KB answer | 5,274 | 347 |
+| Context-size check per model call, ~200k-token history | 3.3 ms | 0.04 ms |
 | CPU of the first turn | 506 ms | 68 ms |
 | Module import time | 213 ms | 163 ms |
 
@@ -74,7 +78,36 @@ running, and the next open rebuilds the window in about a second.
 - Off-screen turns use `content-visibility: auto` (with remembered sizes), so long threads skip
   style, layout and paint for what is not visible.
 
+### Streaming, second pass (profiled with CPU profiles and Chrome traces)
+
+- **Auto-scroll without forced layout.** The view used to read `scrollHeight` after every update,
+  forcing a synchronous layout of the whole thread. It now relies on native scroll anchoring: a
+  1 px sentinel under the thread is the only anchor candidate, so while it is in view the browser
+  keeps it there as content grows; scrolled up, nothing moves. JS scrolling is kept for discrete
+  changes (new message, chat switch) and for browsers without `overflow-anchor`.
+- **The busy logo** animated the sand inside its SVG, which invalidated the SVG and added a
+  second layout to every frame while an agent ran (found as 60 "SVG resource invalidated"
+  events per second in a trace). The whole mark now breathes with opacity instead.
+- **DOMPurify is configured once.** Passing options to every `sanitize()` re-parsed and cloned the
+  configuration on each call — most of the sanitizing cost per update.
+- **Streaming code blocks are not highlighted** until complete (re-highlighting a growing block on
+  every update is quadratic).
+- **Only the live turn re-renders.** It subscribes to the stream on its own; the rest of the chat
+  view no longer renders on every update.
+- **The Codemaster banner** blits pre-rendered layers (background gradients, sprites) instead of
+  redrawing them every frame: 37 → 29 ms/s while the menu is open.
+
 ### Runtime and gateway: load what is used, keep what is needed
+
+- **Deltas are coalesced in the gateway**, not only in the UI: consecutive token deltas of the
+  same kind are merged per session and sent at most every 32 ms (any other event flushes first,
+  so clients see the same sequence). One answer went from 5,274 WebSocket frames to 347, and
+  broadcasts are JSON-encoded once for all clients instead of once per client.
+- The OpenAI-compatible SSE parser reads each chunk in one pass instead of re-slicing its buffer
+  per line.
+- Token estimates are cached per message (history is append-only) and for the frozen system
+  prompt and tool schemas, so the context check before each model call no longer re-scans the
+  whole conversation.
 
 - **Playwright was loaded on the first turn** just to check whether the browser tool is available —
   ~6 MB of JavaScript and ~35 MB of heap. Availability is now a `require.resolve` check; Playwright

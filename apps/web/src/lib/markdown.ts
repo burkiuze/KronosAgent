@@ -3,6 +3,10 @@ import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
 import { t } from './i18n';
 
+// configured once: passing options to every sanitize() call re-parses and clones the whole
+// configuration each time, which was most of the cost of rendering streaming Markdown
+DOMPurify.setConfig({ ADD_ATTR: ['target', 'data-copy'] });
+
 const escapeHtml = (text: string) => text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string);
 
 /** True while rendering text that is still streaming in. */
@@ -16,8 +20,9 @@ const marked = new Marked({
       const language = (lang ?? '').split(/\s/)[0] ?? '';
       let html: string;
       try {
-        // auto-detection tries every grammar, so a block that is still streaming stays plain until it settles
-        html = language && hljs.getLanguage(language) ? hljs.highlight(text, { language }).value : live ? escapeHtml(text) : hljs.highlightAuto(text).value;
+        // a block that is still streaming stays plain: re-highlighting a growing block on every
+        // update is quadratic, and auto-detection tries every grammar. It is highlighted once complete.
+        html = live ? escapeHtml(text) : language && hljs.getLanguage(language) ? hljs.highlight(text, { language }).value : hljs.highlightAuto(text).value;
       } catch {
         html = escapeHtml(text);
       }
@@ -51,7 +56,7 @@ export function renderMarkdown(src: string, opts: { live?: boolean } = {}): stri
   live = Boolean(opts.live);
   let clean: string;
   try {
-    clean = DOMPurify.sanitize(marked.parse(src, { async: false }) as string, { ADD_ATTR: ['target', 'data-copy'] });
+    clean = DOMPurify.sanitize(marked.parse(src, { async: false }) as string);
   } finally {
     live = false;
   }

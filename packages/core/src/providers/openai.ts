@@ -188,10 +188,12 @@ export class OpenAICompatProvider implements Provider {
         const { done, value } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
+        // one pass over the chunk; the unparsed tail is kept once at the end
+        let start = 0;
         let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
+        while ((nl = buf.indexOf('\n', start)) >= 0) {
+          const line = buf.slice(start, nl).trim();
+          start = nl + 1;
           if (!line.startsWith('data:')) continue;
           const data = line.slice(5).trim();
           if (!data || data === '[DONE]') continue;
@@ -206,6 +208,7 @@ export class OpenAICompatProvider implements Provider {
             if (e instanceof ProviderError) throw e;
           }
         }
+        if (start) buf = buf.slice(start);
       }
     }
 

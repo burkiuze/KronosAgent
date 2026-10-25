@@ -199,9 +199,38 @@ const ProgressRail = memo(function ProgressRail({ sessionId }: { sessionId: stri
   );
 });
 
+const NATIVE_ANCHOR = typeof CSS !== 'undefined' && Boolean(CSS.supports?.('overflow-anchor', 'auto'));
+
+/**
+ * The turn that is streaming right now. It is the only part of the thread that changes while
+ * text arrives, so it subscribes to the live state on its own and the rest of the chat view does
+ * not re-render on every streaming update.
+ */
+const LiveTurn = memo(function LiveTurn({ continued }: { continued: boolean }) {
+  const { live, tools } = useStore((s) => {
+    const c = chatOf(s.currentId);
+    return { live: c.live, tools: c.tools };
+  });
+  return (
+    <div className={`assistant-turn live ${continued ? 'continued' : ''}`}>
+      {live.map((li, i) => {
+        if (li.kind === 'thinking') return <ThinkingBlock key={i} text={li.text} live={i === live.length - 1} />;
+        if (li.kind === 'text') return <StreamingMarkdown key={i} text={li.text} />;
+        const tl = tools[li.id];
+        return tl ? <ToolCard key={li.id} id={li.id} name={tl.name} input={tl.input} live={tl} pending /> : null;
+      })}
+      {!live.length && <ThinkingBlock text="" live />}
+    </div>
+  );
+});
+
 export function ChatView() {
   const currentId = useStore((s) => s.currentId);
-  const chat = useStore((s) => chatOf(s.currentId));
+  // everything the view shows except the live stream (see LiveTurn)
+  const chat = useStore((s) => {
+    const c = chatOf(s.currentId);
+    return { messages: c.messages, pendingUser: c.pendingUser, running: c.running, loaded: c.loaded, tools: c.tools, todos: c.todos, subagents: c.subagents, notices: c.notices };
+  });
   const permissions = useStore((s) => s.permissions.filter((p) => p.sessionId === s.currentId));
   const clarify = useStore((s) => s.clarify.filter((c) => c.sessionId === s.currentId));
   const scroller = useRef<HTMLDivElement>(null);
@@ -210,10 +239,16 @@ export function ChatView() {
   const subagents = Object.values(chat.subagents);
   const showRail = chat.todos.length > 0;
 
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  });
+  // Pin to the bottom on discrete changes only (chat switch, a new message, a card). While text
+  // streams in, native scroll anchoring on the bottom sentinel keeps the view pinned with no
+  // forced layout per update; browsers without it fall back to scrolling after every render.
+  useLayoutEffect(
+    () => {
+      const el = scroller.current;
+      if (el && stick.current) el.scrollTop = el.scrollHeight;
+    },
+    NATIVE_ANCHOR ? [currentId, chat.loaded, chat.messages.length, chat.pendingUser, chat.running, permissions.length, clarify.length] : undefined,
+  );
   useEffect(() => {
     stick.current = true;
   }, [currentId]);
@@ -230,7 +265,6 @@ export function ChatView() {
 
   const lastIsAssistant = items[items.length - 1]?.kind === 'assistant';
   const lastAssistantIndex = items.map((x) => x.kind).lastIndexOf('assistant');
-  const live = chat.live;
   return (
     <div className="chat">
       <ChatHeader sessionId={currentId} />
@@ -273,17 +307,7 @@ export function ChatView() {
                 );
               })}
               {chat.pendingUser && <UserMessage message={chat.pendingUser} pending />}
-              {chat.running && (
-                <div className={`assistant-turn live ${lastIsAssistant ? 'continued' : ''}`}>
-                  {live.map((li, i) => {
-                    if (li.kind === 'thinking') return <ThinkingBlock key={i} text={li.text} live={i === live.length - 1} />;
-                    if (li.kind === 'text') return <StreamingMarkdown key={i} text={li.text} />;
-                    const tl = chat.tools[li.id];
-                    return tl ? <ToolCard key={li.id} id={li.id} name={tl.name} input={tl.input} live={tl} pending /> : null;
-                  })}
-                  {!live.length && <ThinkingBlock text="" live />}
-                </div>
-              )}
+              {chat.running && <LiveTurn continued={lastIsAssistant} />}
               {subagents.length > 0 && chat.running && <SubagentPanel agents={subagents} />}
               {chat.notices.filter((n) => n.level !== 'info').slice(-2).map((n) => (
                 <div key={n.id} className={`notice ${n.level}`}>
@@ -297,6 +321,7 @@ export function ChatView() {
                 <ClarifyCard key={c.requestId} req={c} />
               ))}
             </div>
+            <div className="scroll-anchor" aria-hidden />
           </div>
           <Composer />
         </div>

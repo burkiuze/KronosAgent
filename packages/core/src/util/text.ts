@@ -32,11 +32,23 @@ export function estimatePartTokens(p: Part): number {
   }
 }
 
+// History is append-only, so a message's estimate never changes once it is counted. Caching it
+// makes the per-iteration context check O(new messages) instead of re-scanning every character
+// of a long conversation before each model call.
+const messageTokens = new WeakMap<Message, { parts: number; tokens: number }>();
+
 export function estimateMessagesTokens(messages: Message[]): number {
   let n = 0;
   for (const m of messages) {
-    n += 4;
-    for (const p of m.parts) n += estimatePartTokens(p);
+    const hit = messageTokens.get(m);
+    if (hit && hit.parts === m.parts.length) {
+      n += hit.tokens;
+      continue;
+    }
+    let t = 4;
+    for (const p of m.parts) t += estimatePartTokens(p);
+    messageTokens.set(m, { parts: m.parts.length, tokens: t });
+    n += t;
   }
   return n;
 }
