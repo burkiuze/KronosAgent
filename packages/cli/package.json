@@ -1,18 +1,21 @@
 {
   "name": "kronos-agent",
   "version": "1.0.0",
-  "description": "KRONOS AGENT — terminal interface for the Kronos autonomous agent.",
+  "description": "KRONOS AGENT \u2014 terminal interface for the Kronos autonomous agent.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "kronos": "./dist/bin.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b"
   },
   "dependencies": {
     "@kronos/core": "1.0.0",
-    "@kronos/gateway": "1.0.0"
+    "@kronos/gateway": "1.0.0",
+    "yaml": "^2.9.1"
   }
 }
