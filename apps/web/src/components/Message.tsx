@@ -5,6 +5,8 @@ import {
   CircleCheck,
   Circle,
   CircleDot,
+  ClipboardList,
+  ShieldCheck,
   Undo2,
   ChevronDown,
   ChevronRight,
@@ -71,6 +73,8 @@ function toolIcon(name: string) {
   if (/web_|browser|http_request/.test(name)) return Globe;
   if (name === 'memory') return Brain;
   if (name === 'todo_write') return ListTodo;
+  if (name === 'verify') return ShieldCheck;
+  if (name === 'team_board') return ClipboardList;
   if (name === 'delegate') return Users;
   if (/skill/.test(name)) return Puzzle;
   if (/cron/.test(name)) return Clock;

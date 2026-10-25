@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import type { ModelInfo, PermissionMode } from '../types.js';
 import type { AgentDefinition } from './definitions.js';
 import { truncate } from '../util/text.js';
+import { describeChecks, type ProjectCheck } from './checks.js';
 
 export const PERSONALITIES: Record<string, { label: string; prompt: string }> = {
   default: { label: 'Balanced', prompt: '' },
@@ -87,6 +88,10 @@ export interface PromptInput {
   subagent?: { definition?: AgentDefinition; depth: number; context?: string };
   preloadedSkills?: { name: string; content: string }[];
   language?: string;
+  /** detected test/typecheck/lint/build commands of the workspace */
+  checks?: ProjectCheck[];
+  /** set for members of a delegated team that share a board */
+  team?: { member: string; teammates: string[] };
 }
 
 const SURFACE_NOTES: Record<string, string> = {
@@ -172,7 +177,9 @@ You are in read-only plan mode. Investigate freely with read-only tools, then pr
 - Working directory: ${p.cwd}${p.cwd === homedir() ? ' (home)' : ''}
 - Platform: ${platform()} ${release()}${user ? `, user ${user}` : ''}
 - Terminal backend: ${p.backend}
-- Model: ${p.model.name} (${p.model.ref})${git ? `\n- Git: ${git}` : ''}`);
+- Model: ${p.model.name} (${p.model.ref})${git ? `\n- Git: ${git}` : ''}${
+    p.checks?.length ? `\n- Project checks: ${describeChecks(p.checks)}${p.toolNames.includes('verify') ? ' — run them with the verify tool after changing code and before reporting success' : ''}` : ''
+  }`);
 
   if (p.contextFiles?.length) {
     const blocks = p.contextFiles.map((f) => `## ${relative(p.cwd, f.path) || f.path}\n${f.content}`);
@@ -193,6 +200,14 @@ You are in read-only plan mode. Investigate freely with read-only tools, then pr
 Another Kronos agent delegated a task to you. You cannot talk to the user. Work autonomously, then reply with a final report containing exactly what the delegating agent needs: findings, decisions, file paths with line numbers, changes made and verification. Keep it dense — no pleasantries.${
       p.subagent.definition ? `\n\n## Role: ${p.subagent.definition.name}\n${p.subagent.definition.prompt}` : ''
     }${p.subagent.context ? `\n\n## Shared context from the delegating agent\n${p.subagent.context}` : ''}`);
+  }
+
+  if (p.team) {
+    sections.push(`# Team board
+You are "${p.team.member}", one of ${p.team.teammates.length + 1} agents working in parallel on related tasks (teammates: ${p.team.teammates.join(', ')}). Nobody coordinates you; you share a team board instead.
+- Read it (team_board read) when you start and before any decision that affects teammates.
+- Post what others need to know as soon as you know it: interfaces or names you defined, decisions, facts you discovered, files you are changing. Short and concrete.
+- Before taking on work outside your own task, add it as an item and claim it so nobody duplicates it; mark items done with a one-line note.`);
   }
 
   return sections.join('\n\n');

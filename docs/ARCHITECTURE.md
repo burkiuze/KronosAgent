@@ -69,7 +69,8 @@ user input ─▶ userPromptSubmit hooks ─▶ append to history
    │           └─────────────────────────────┬─────────────────────────────┘
    │                                         │ tool_result blocks
    └──────────── loop until end_turn / max iterations / interrupt ◀────────┘
-                then: stop hooks, auto-title, memory & skill nudges, usage log
+                files changed but never verified? → one verification turn first
+                then: stop hooks, auto-title, memory & skill nudges, skill outcomes, usage log
 ```
 
 Key properties:
@@ -90,7 +91,19 @@ Key properties:
 - **Subagents** (`delegate`): each gets a fresh context, a typed role (general, explorer,
   researcher, coder, reviewer, planner, or a markdown-defined agent), its own tool subset and an
   optional cheaper model; they run concurrently up to `agent.subagents.maxConcurrent` and nest to
-  `maxDepth`.
+  `maxDepth`. Two or more subagents form a **team** with a shared board (`agent/board.ts`,
+  `team_board` tool): no coordinator — members read it, post what others need, claim extra work
+  items (claiming someone else's fails) and mark them done; the parent gets the board with the
+  reports and the UI shows posts live.
+- **Verification** is part of the harness: the workspace's own checks are detected
+  (`agent/checks.ts`) and listed in the prompt, the `verify` tool runs them and returns PASS/FAIL
+  with failing lines first, and a run that changed files without verifying afterwards gets one
+  verification turn before it may finish (`agent.verifyBeforeFinish`).
+- **Codemaster** (effort `codemaster`): maximum effort plus a workflow note — gather information,
+  plan with acceptance checks, Propose–Probe–Compose for non-obvious decisions, verify, independent
+  review, capture what is reusable. Its on/off state is restored from history.
+- **Idle agents are capped** (8, LRU); everything they hold is persisted, so an evicted session
+  rebuilds its agent on the next message.
 
 ## Providers (`providers/`)
 
@@ -111,17 +124,17 @@ Key properties:
 
 ## Tools (`tools/`)
 
-33 built-in tools grouped into toolsets that can be toggled per profile:
+35 built-in tools grouped into toolsets that can be toggled per profile:
 
 | Toolset | Tools |
 |---|---|
 | files | `read_file`, `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `list_dir`, `glob`, `grep`, `fs` |
-| shell | `shell`, `process` (background processes) |
+| shell | `shell`, `process` (background processes), `verify` (the project's own checks) |
 | code | `execute_code` (Python / JavaScript / Bash) |
 | web · http · browser | `web_search`, `web_fetch`, `http_request`, `browser` |
 | memory · sessions | `memory`, `session_search` |
 | todo · clarify · core | `todo_write`, `ask_user`, `exit_plan_mode` |
-| delegate · skills | `delegate`, `skills_list`, `skill_view`, `skill_manage` |
+| delegate · skills | `delegate`, `team_board` (team members only), `skills_list`, `skill_view`, `skill_manage` |
 | cron | `cron_create`, `cron_list`, `cron_update` |
 | image · vision · voice | `generate_image`, `view_image`, `text_to_speech` |
 | artifacts · messaging | `artifact_create`, `send_message` |
@@ -154,6 +167,13 @@ Secrets in tool output are redacted when `safety.redactSecrets` is on.
   supporting files; `skill_manage` creates, patches, updates, deletes and installs from git.
   BM25 search ranks skills for a task. After many tool calls in a turn the agent is nudged to
   capture the procedure as a skill.
+- **Skill governance** — self-improvement that cannot run away: skills the agent writes pass an
+  **admission gate** (bounded size, a real "when to use" description, no secrets, no task-specific
+  values such as temp paths or run ids, not a duplicate); each session has an **edit budget**
+  (`skills.editBudget`); every change **snapshots the previous version** (`.history/`, 20 kept),
+  `rollback` restores any version (deleted skills included) and a rolled-back change is
+  **not admitted again**; run **outcomes** per skill are recorded and stale or failing
+  agent-written skills are offered for **pruning** (`kronos skills prune`, Skills page).
 - **Sessions** (`sessions/store.ts`): sessions, messages (JSON parts), usage records and an FTS5
   index over message text. Child sessions record subagent runs. Without SQLite, an equivalent
   JSON-file store is used.
@@ -201,6 +221,30 @@ Secrets in tool output are redacted when `safety.redactSecrets` is on.
   active_profile
 ```
 
+## Evaluation (`eval/runner.ts`)
+
+`kronos eval suite.yaml` runs every case × repeat × (model, effort) configuration in a **fresh,
+isolated runtime** (its own home: no memory, skills or sessions carry over) and a fresh workspace
+built from the case's fixture files. Checks are typed: answer contains / regex, file exists /
+contains, a shell command that must pass, a tool-call ceiling. The report gives pass rate with its
+**standard deviation across repeats** (the same configuration varies a lot from run to run),
+tokens, cost, time and tool calls per run; `--out` writes every run as JSON.
+`examples/evals/smoke.yaml` is a starting point.
+
+## Design map
+
+How the pieces line up along the four dimensions agent surveys use to compare systems:
+
+| Dimension | Kronos |
+|---|---|
+| **Autonomy** | agent loop with plans (`todo_write`), compaction, interrupts, checkpoints/undo; effort levels and Codemaster; cron automations that run unattended; verification enforced before finishing |
+| **Tool use** | 35 tools in toggleable toolsets + every MCP server; risk levels per tool; project checks detected and exposed through `verify`; actions-as-code (`execute_code`, `shell`) |
+| **Collaboration** | typed subagents in parallel; teams coordinate through a shared board with claims; 15+ chat platforms; the OpenAI-compatible API and an MCP server for other agents |
+| **Safety & governance** | permission modes, allow/deny rules, dangerous-command detection, protected paths, sandboxed backends, secret redaction; bounded, versioned and reversible self-modification (skill governance); evaluation with repeats before trusting a change |
+
+The research behind the latest changes is summarised in [RESEARCH.md](RESEARCH.md); resource
+use is covered in [PERFORMANCE.md](PERFORMANCE.md).
+
 ## Testing
 
 - `npm test` — vitest: utilities, providers' message conversion, the full agent loop against the
@@ -209,4 +253,8 @@ Secrets in tool output are redacted when `safety.redactSecrets` is on.
   streaming, auth, OpenAI-compatible API, PTY terminal).
 - `npm run test:e2e` — boots a gateway on a temp home and drives the real UI in Chromium with
   Playwright (chat, tool cards, plans, every page, settings, palette, files, terminal), failing on
-  any browser error.
+  any browser error, plus an idle-CPU regression guard.
+- Architecture tests (`packages/core/test/architecture.test.ts`): project-check detection, the
+  verify tool and the verification guard, the team board (claims, posts, team prompts), skill
+  admission / budget / history / rollback / pruning, and the eval runner.
+- `npm run bench` — CPU and memory of the UI (idle and streaming) and the gateway.

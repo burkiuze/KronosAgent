@@ -1,9 +1,12 @@
 export * from './types.js';
-export { Kronos, ensureProfile, type KronosOptions, type RuntimeEvent, type ExpandedInput, type CommandInfo, type MessagingBridge } from './runtime.js';
+export { Kronos, ensureProfile, type SkillStats, type KronosOptions, type RuntimeEvent, type ExpandedInput, type CommandInfo, type MessagingBridge } from './runtime.js';
 export { Agent, type AgentOptions, type AgentRunOptions, type AgentRunResult, type DelegateResult, type DelegateTask } from './agent/agent.js';
 export { buildSystemPrompt, discoverContextFiles, PERSONALITIES } from './agent/prompt.js';
 export { loadAgentDefinitions, type AgentDefinition } from './agent/definitions.js';
 export { CheckpointManager } from './agent/checkpoints.js';
+export { detectProjectChecks, describeChecks, failureHighlights, type ProjectCheck } from './agent/checks.js';
+export { TeamBoard, type BoardItem, type BoardPost } from './agent/board.js';
+export { parseEvalSuite, evalConfigs, runEvalSuite, summarizeEval, type EvalSuite, type EvalCase, type EvalCheck, type EvalConfig, type EvalRunRecord, type EvalConfigSummary } from './eval/runner.js';
 export { HookRunner } from './agent/hooks.js';
 
 export { defaultConfig, ALL_TOOLSETS, CONFIG_SECTIONS, type KronosConfig, type McpServerConfig, type ProviderConfig, type CustomProviderConfig, type HookConfig } from './config/schema.js';
@@ -22,7 +25,7 @@ export { TOOLSETS, type ToolDefinition, type ToolContext, type ToolsetInfo } fro
 export { webSearch, pickSearchProvider } from './tools/web.js';
 
 export { MemoryStore, type MemoryTarget, type MemoryChange } from './memory/store.js';
-export { SkillRegistry, type SkillInfo } from './skills/registry.js';
+export { SkillRegistry, type SkillInfo, type SkillRevision, type AdmissionResult } from './skills/registry.js';
 export { openSessionStore, messagePlainText, type SessionRecord, type SessionStore, type SearchHit, type UsageSummaryRow } from './sessions/store.js';
 export { ArtifactStore, type Artifact } from './artifacts/store.js';
 export { CronScheduler, type CronJob, type CronRunRecord } from './cron/scheduler.js';

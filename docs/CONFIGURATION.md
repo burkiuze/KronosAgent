@@ -68,6 +68,7 @@ Then use `vllm:qwen3-coder-480b` anywhere a model is accepted.
 | `agent.compaction` | `{enabled: true, threshold: 0.8, keepRecentTurns: 2}` | Summarise older turns past this fraction of the context window. |
 | `agent.subagents` | `{maxConcurrent: 4, maxDepth: 2, maxIterations: 60}` | Delegation limits. |
 | `agent.nudges` | `{memoryEvery: 12, skillAfterToolCalls: 18}` | When to remind the agent to save memories / capture a skill. |
+| `agent.verifyBeforeFinish` | `true` | If a run changed files and never ran `verify` afterwards (and the project has checks), ask for one verification turn before finishing. |
 
 ## Toolsets
 
@@ -130,6 +131,8 @@ hooks:
 | `skills.dirs` | `[]` | Extra skill directories. |
 | `skills.disabled` | `[]` | Skill names to hide. |
 | `skills.autoCreate` | `true` | Nudge the agent to write skills from hard-won procedures. |
+| `skills.editBudget` | `3` | Skills the agent may create or change per session. Every change is versioned; `kronos skills rollback` restores. |
+| `skills.staleAfterDays` | `60` | Agent-written skills unused this long (or failing more than succeeding) are offered for pruning. |
 | `skills.claudeCompat` | `true` | Also load `~/.claude/skills`, `.claude/skills` and Claude agent definitions. |
 
 ## Web, browser, media, voice

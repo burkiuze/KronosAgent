@@ -1,0 +1,30 @@
+# kronos eval examples/evals/smoke.yaml --repeats 3
+# Runs every case several times per configuration in a fresh, isolated runtime and reports
+# pass rate ± spread, tokens, cost, time and tool calls. Add a matrix to compare configs:
+#   matrix: { model: [sonnet, opus], effort: [medium, high] }
+name: smoke
+repeats: 3
+timeoutSec: 600
+cases:
+  - name: lists the workspace
+    prompt: list the files here
+    files:
+      README.md: "# fixture project\n"
+    checks:
+      - contains: README.md
+      - max_tool_calls: 6
+
+  - name: writes a file
+    prompt: create file notes.md
+    checks:
+      - file: notes.md
+
+  - name: fixes a failing test
+    prompt: The test in this project fails. Find out why, fix the code (not the test) and verify.
+    files:
+      package.json: '{ "name": "cart", "type": "module", "scripts": { "test": "node --test" } }'
+      cart.js: "export const total = (xs) => xs.reduce((a, b) => a - b, 0);\n"
+      cart.test.js: "import { test } from 'node:test';\nimport assert from 'node:assert';\nimport { total } from './cart.js';\ntest('total', () => assert.equal(total([1, 2, 3]), 6));\n"
+    checks:
+      - command: npm test
+      - file_contains: { path: cart.test.js, text: "assert.equal(total([1, 2, 3]), 6)" }

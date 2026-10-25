@@ -8,6 +8,7 @@ import { generateImage, imageProviderStatus, textToSpeech } from '../media/media
 import { truncate } from '../util/text.js';
 import { newId, formatDuration } from '../util/misc.js';
 import { PLATFORM_LABELS, type PlatformId } from '../messaging/senders.js';
+import type { TeamBoard } from '../agent/board.js';
 
 // ---------------------------------------------------------------------------
 // Memory & recall
@@ -210,11 +211,74 @@ export const delegateTool: ToolDefinition<{
   },
   summarize: (i) => `Delegate ${i.tasks?.length ?? 0} task(s): ${(i.tasks ?? []).map((t) => t.label ?? truncate(t.task, 24)).join(', ')}`,
   async execute(input, ctx) {
-    const results = await ctx.agent.delegate(input.tasks, { context: input.context, signal: ctx.signal, parentToolCallId: ctx.toolCallId });
+    let board: TeamBoard | undefined;
+    const results = await ctx.agent.delegate(input.tasks, { context: input.context, signal: ctx.signal, parentToolCallId: ctx.toolCallId, onBoard: (b) => (board = b) });
     const body = results
       .map((r) => `## ${r.label} — ${r.ok ? 'done' : 'FAILED'} (${formatDuration(r.durationMs)}, session ${r.sessionId})\n${r.text || r.error || '(no output)'}`)
       .join('\n\n');
-    return { content: body, isError: results.every((r) => !r.ok), meta: { subagents: results.map((r) => ({ label: r.label, ok: r.ok, sessionId: r.sessionId })) } };
+    const team = board && board.posts.length ? `\n\n## Team board (what the subagents shared with each other)\n${board.render()}` : '';
+    return {
+      content: body + team,
+      isError: results.every((r) => !r.ok),
+      meta: { subagents: results.map((r) => ({ label: r.label, ok: r.ok, sessionId: r.sessionId })), boardPosts: board?.posts.length ?? 0 },
+    };
+  },
+};
+
+export const teamBoardTool: ToolDefinition<{ action: 'read' | 'post' | 'add' | 'claim' | 'done'; text?: string; id?: string; note?: string; since?: number }> = {
+  name: 'team_board',
+  toolset: 'delegate',
+  risk: 'read',
+  description:
+    'The board you share with the other agents delegated alongside you (no coordinator — you organize through it). ' +
+    'read{since?}: items and posts (since = last post number you saw). post{text}: share something teammates need (an interface you defined, a decision, a discovered fact, files you are changing). ' +
+    'add{text}: add a work item; claim{id}: take an open item before working on it (fails if someone else has it); done{id, note}: mark your item finished.',
+  parameters: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['read', 'post', 'add', 'claim', 'done'] },
+      text: { type: 'string' },
+      id: { type: 'string', description: 'Item id, e.g. "#3".' },
+      note: { type: 'string' },
+      since: { type: 'integer', minimum: 0 },
+    },
+    required: ['action'],
+  },
+  summarize: (i) => (i.action === 'post' ? `Board: ${truncate(i.text ?? '', 60)}` : `Board ${i.action}${i.id ? ` ${i.id}` : ''}`),
+  async execute(input, ctx) {
+    const team = ctx.agent.team;
+    if (!team) return { content: 'You are not part of a delegated team, so there is no board.', isError: true };
+    const { board, member } = team;
+    try {
+      switch (input.action) {
+        case 'post': {
+          if (!input.text?.trim()) return { content: 'text is required', isError: true };
+          const p = board.post(member, input.text);
+          return { content: `Posted (${p.seq}).` };
+        }
+        case 'add': {
+          if (!input.text?.trim()) return { content: 'text is required', isError: true };
+          const item = board.add(input.text);
+          return { content: `Added ${item.id}: ${item.title} — claim it before working on it.` };
+        }
+        case 'claim': {
+          if (!input.id) return { content: 'id is required', isError: true };
+          const item = board.claim(input.id, member);
+          return { content: `You own ${item.id}: ${item.title}` };
+        }
+        case 'done': {
+          if (!input.id) return { content: 'id is required', isError: true };
+          const item = board.complete(input.id, member, input.note);
+          board.post(member, `finished ${item.id} ${item.title}${item.note ? ` — ${item.note}` : ''}`);
+          return { content: `Marked ${item.id} done.` };
+        }
+        case 'read':
+        default:
+          return { content: board.render({ since: input.since, reader: member }) };
+      }
+    } catch (e) {
+      return { content: (e as Error).message, isError: true };
+    }
   },
 };
 
@@ -255,7 +319,8 @@ export const skillViewTool: ToolDefinition<{ name: string; file?: string }> = {
 };
 
 export const skillManageTool: ToolDefinition<{
-  action: 'create' | 'update' | 'patch' | 'delete' | 'install';
+  action: 'create' | 'update' | 'patch' | 'delete' | 'install' | 'history' | 'rollback';
+  version?: string;
   name?: string;
   description?: string;
   body?: string;
@@ -272,11 +337,14 @@ export const skillManageTool: ToolDefinition<{
   description:
     'Create and improve skills — your procedural memory. After finishing a complex or novel task, capture the reusable procedure as a skill ' +
     '(create{name, description, body, category, files?}). When a skill was wrong or incomplete, fix it (patch{name, old_text, new_text} or update{name, body}). ' +
-    'install{source} pulls skills from a git URL or "owner/repo/path". delete removes a user skill. A good skill states when to use it, the exact steps, pitfalls and verification.',
+    'install{source} pulls skills from a git URL or "owner/repo/path". delete removes a user skill. history{name} lists saved versions; rollback{name, version?} restores one. ' +
+    'A good skill states when to use it, the exact steps, pitfalls and verification. Changes pass an admission check (reusable, no secrets or task-specific values, ' +
+    'not a duplicate, not a change that was already rolled back) and each session has a small edit budget — make edits count.',
   parameters: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['create', 'update', 'patch', 'delete', 'install'] },
+      action: { type: 'string', enum: ['create', 'update', 'patch', 'delete', 'install', 'history', 'rollback'] },
+      version: { type: 'string', description: 'rollback: version to restore (default: the latest saved one).' },
       name: { type: 'string' },
       description: { type: 'string', description: 'One-line description: what it does and when to use it.' },
       body: { type: 'string', description: 'Markdown instructions (SKILL.md body).' },
@@ -292,21 +360,51 @@ export const skillManageTool: ToolDefinition<{
   summarize: (i) => `${i.action} skill ${i.name ?? i.source ?? ''}`,
   async execute(input, ctx) {
     const reg = ctx.runtime.skills;
+    const writes = input.action === 'create' || input.action === 'update' || input.action === 'patch';
+    if (writes && ctx.agent.skillEditsLeft() <= 0) {
+      return {
+        content: `The skill edit budget for this session is used up (${ctx.runtime.config.skills.editBudget}). Finish the task; note what you would change in your answer so the user can decide.`,
+        isError: true,
+      };
+    }
+    const rejected = (r: { problems: string[] }) => ({ content: `Not admitted:\n${r.problems.map((p) => `- ${p}`).join('\n')}`, isError: true });
     switch (input.action) {
       case 'create': {
         if (!input.name || !input.description || !input.body) return { content: 'create needs name, description and body', isError: true };
+        const verdict = reg.admit({ name: input.name, description: input.description, body: input.body });
+        if (!verdict.ok) return rejected(verdict);
         const s = reg.create({ name: input.name, description: input.description, body: input.body, category: input.category, tags: input.tags, files: input.files });
+        ctx.agent.noteSkillEdit();
         return { content: `Created skill "${s.name}" at ${s.path}. It will appear in the skills index of new sessions.` };
       }
       case 'update': {
         if (!input.name) return { content: 'name is required', isError: true };
+        const verdict = reg.admit({ name: input.name, description: input.description, body: input.body, existing: input.name });
+        if (!verdict.ok) return rejected(verdict);
         const s = reg.update(input.name, { description: input.description, body: input.body, files: input.files });
-        return { content: `Updated skill "${s.name}" → v${s.version}.` };
+        ctx.agent.noteSkillEdit();
+        return { content: `Updated skill "${s.name}" → v${s.version} (previous version saved; rollback restores it).` };
       }
       case 'patch': {
         if (!input.name || !input.old_text || input.new_text === undefined) return { content: 'patch needs name, old_text and new_text', isError: true };
+        const verdict = reg.admit({ name: input.name, body: reg.previewPatch(input.name, input.old_text, input.new_text), existing: input.name });
+        if (!verdict.ok) return rejected(verdict);
         const s = reg.patch(input.name, input.old_text, input.new_text);
-        return { content: `Patched skill "${s.name}" → v${s.version}.` };
+        ctx.agent.noteSkillEdit();
+        return { content: `Patched skill "${s.name}" → v${s.version} (previous version saved; rollback restores it).` };
+      }
+      case 'history': {
+        if (!input.name) return { content: 'name is required', isError: true };
+        const revs = reg.history(input.name);
+        const current = reg.get(input.name);
+        return {
+          content: `${current ? `Current: v${current.version ?? '1.0.0'}` : 'Currently deleted'}\n${revs.length ? revs.map((r) => `- v${r.version} saved ${new Date(r.savedAt).toISOString().slice(0, 16).replace('T', ' ')} (${r.reason})`).join('\n') : 'No earlier versions.'}`,
+        };
+      }
+      case 'rollback': {
+        if (!input.name) return { content: 'name is required', isError: true };
+        const s = reg.rollback(input.name, input.version);
+        return { content: `Restored "${s.name}" to v${s.version}. The undone change is remembered and will not be admitted again.` };
       }
       case 'delete':
         if (!input.name) return { content: 'name is required', isError: true };
@@ -559,6 +657,7 @@ export const agenticTools = [
   askUserTool,
   exitPlanModeTool,
   delegateTool,
+  teamBoardTool,
   skillsListTool,
   skillViewTool,
   skillManageTool,

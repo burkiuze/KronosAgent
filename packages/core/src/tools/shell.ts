@@ -6,6 +6,7 @@ import { explainExit, which } from '../util/process.js';
 import { resolvePath } from '../config/paths.js';
 import { truncate } from '../util/text.js';
 import { formatDuration } from '../util/misc.js';
+import { detectProjectChecks, failureHighlights, type ProjectCheck } from '../agent/checks.js';
 
 function formatRun(r: { output: string; exitCode: number | null; signal: NodeJS.Signals | null; timedOut: boolean; aborted: boolean; durationMs: number }, timeoutSec: number): string {
   const out = r.output.replace(/\s+$/, '');
@@ -169,4 +170,69 @@ export const executeCodeTool: ToolDefinition<{ language: 'python' | 'javascript'
   },
 };
 
-export const shellTools = [shellTool, processTool, executeCodeTool] as ToolDefinition[];
+/**
+ * Verification as a tool rather than a request: runs the project's own checks (or a given
+ * command) and returns a verdict with the failing lines first. Asking a model to "verify" barely
+ * changes what it does; a dedicated tool that makes checking cheap and the result explicit does.
+ */
+export const verifyTool: ToolDefinition<{ checks?: string[]; command?: string; timeout?: number }> = {
+  name: 'verify',
+  toolset: 'shell',
+  risk: 'execute',
+  description:
+    "Check that the work is actually correct by running the project's own checks — detected automatically (typecheck, lint, test, build from " +
+    'package.json, pyproject, Cargo, go.mod, Makefile, …) — or a specific command. Returns PASS/FAIL per check with the failing lines first. ' +
+    'Run it after changing code and before reporting success; fix and re-run until it passes, or report exactly what still fails. ' +
+    'checks: subset to run, e.g. ["test"] (default: all detected). command: run this instead (e.g. a single test file).',
+  parameters: {
+    type: 'object',
+    properties: {
+      checks: { type: 'array', items: { type: 'string' }, description: 'Which detected checks to run (typecheck, lint, test, build). Default: all.' },
+      command: { type: 'string', description: 'A specific verification command, e.g. "npx vitest run src/cart.test.ts".' },
+      timeout: { type: 'integer', minimum: 10, maximum: 1800, description: 'Timeout per check in seconds (default 600).' },
+    },
+  },
+  summarize: (i) => (i.command ? `Verify: ${truncate(i.command, 70)}` : `Verify ${(i.checks ?? ['all checks']).join(', ')}`),
+  async execute(input, ctx) {
+    let plan: ProjectCheck[];
+    if (input.command) plan = [{ name: 'check', command: input.command, source: 'given' }];
+    else {
+      const detected = detectProjectChecks(ctx.cwd);
+      plan = input.checks?.length ? detected.filter((c) => input.checks!.includes(c.name)) : detected;
+      if (!detected.length)
+        return {
+          content: 'No project checks were detected here (no package.json scripts, pyproject, Cargo.toml, go.mod or Makefile targets). Pass `command` with the command that proves the change works.',
+          isError: true,
+        };
+      if (!plan.length) return { content: `None of ${input.checks?.join(', ')} exist. Detected: ${detected.map((c) => c.name).join(', ')}.`, isError: true };
+    }
+    const timeoutSec = Math.min(1800, input.timeout ?? Math.max(600, ctx.runtime.config.terminal.timeoutSec));
+    const results: { check: ProjectCheck; ok: boolean; exitCode: number | null; durationMs: number; output: string; timedOut: boolean }[] = [];
+    for (const check of plan) {
+      if (ctx.signal.aborted) break;
+      ctx.progress(`${check.name}: ${check.command}`);
+      const r = await ctx.runtime.backend.exec(check.command, { cwd: ctx.cwd, timeoutMs: timeoutSec * 1000, signal: ctx.signal });
+      results.push({ check, ok: r.exitCode === 0 && !r.timedOut, exitCode: r.exitCode, durationMs: r.durationMs, output: r.output, timedOut: r.timedOut });
+    }
+    const passed = results.filter((r) => r.ok).length;
+    const ok = results.length === plan.length && passed === results.length;
+    ctx.agent.noteVerification(ok);
+    const lines = [`VERIFY: ${ok ? 'PASS' : 'FAIL'} (${passed}/${plan.length} checks passed)`];
+    for (const r of results) {
+      lines.push(`${r.ok ? '✓' : '✗'} ${r.check.name.padEnd(9)} ${r.check.command}  (${formatDuration(r.durationMs)}${r.ok ? '' : r.timedOut ? ', timed out' : `, exit ${r.exitCode}`})`);
+    }
+    for (const r of results.filter((x) => !x.ok)) {
+      const highlights = failureHighlights(r.output);
+      lines.push('', `--- ${r.check.name}: ${highlights.length ? 'failing lines' : 'output (tail)'} ---`);
+      lines.push(highlights.length ? highlights.join('\n') : r.output.trimEnd().split('\n').slice(-40).join('\n'));
+      if (highlights.length) lines.push(`--- ${r.check.name}: output (tail) ---`, r.output.trimEnd().split('\n').slice(-25).join('\n'));
+    }
+    return {
+      content: lines.join('\n'),
+      isError: !ok,
+      meta: { verdict: ok ? 'pass' : 'fail', checks: results.map((r) => ({ name: r.check.name, command: r.check.command, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs })) },
+    };
+  },
+};
+
+export const shellTools = [shellTool, processTool, executeCodeTool, verifyTool] as ToolDefinition[];

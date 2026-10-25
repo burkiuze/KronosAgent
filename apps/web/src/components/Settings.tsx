@@ -74,6 +74,7 @@ const DEFS: Def[] = [
   { section: 'chat', key: 'agent.language', label: 'Reply language', desc: '"auto" mirrors your language.', kind: 'text', placeholder: 'auto' },
   { section: 'chat', key: 'agent.instructions', label: 'Custom instructions', desc: 'Added to every conversation (like a global KRONOS.md).', kind: 'textarea' },
   { section: 'chat', key: 'agent.maxIterations', label: 'Max tool iterations per message', kind: 'number', min: 1, max: 1000 },
+  { section: 'chat', key: 'agent.verifyBeforeFinish', label: 'Verify before finishing', desc: 'When Kronos changed files but never ran the project checks, it is asked to verify once before it reports back.', kind: 'toggle' },
   { section: 'chat', key: 'agent.parallelTools', label: 'Parallel tool calls', desc: 'Run independent read-only tools concurrently.', kind: 'toggle' },
   { section: 'chat', key: 'agent.autoTitle', label: 'Auto-title conversations', kind: 'toggle' },
   { section: 'chat', key: 'agent.toolOutputLimit', label: 'Tool output limit (chars)', desc: 'Longer output is truncated in the middle and saved to a file.', kind: 'number', min: 2000, max: 500000, step: 1000 },
@@ -119,6 +120,8 @@ const DEFS: Def[] = [
   { section: 'memory', key: 'agent.nudges.memoryEvery', label: 'Memory nudge every N turns', desc: '0 disables.', kind: 'number', min: 0, max: 100 },
   { section: 'memory', key: 'skills.autoCreate', label: 'Self-improving skills', desc: 'Nudge Kronos to save complex workflows as skills.', kind: 'toggle' },
   { section: 'memory', key: 'agent.nudges.skillAfterToolCalls', label: 'Skill nudge after N tool calls', kind: 'number', min: 3, max: 200 },
+  { section: 'memory', key: 'skills.editBudget', label: 'Skill edits per session', desc: 'How many skills Kronos may create or change in one conversation. Every change is versioned and can be restored.', kind: 'number', min: 0, max: 20 },
+  { section: 'memory', key: 'skills.staleAfterDays', label: 'Flag unused skills after (days)', desc: 'Skills Kronos wrote that go unused this long are offered for review.', kind: 'number', min: 7, max: 365 },
 
   { section: 'voice', key: 'voice.stt', label: 'Speech-to-text', kind: 'select', options: [{ value: 'openai', label: 'OpenAI Whisper' }, { value: 'groq', label: 'Groq Whisper' }, { value: 'none', label: 'Browser only' }] },
   { section: 'voice', key: 'voice.tts', label: 'Text-to-speech', kind: 'select', options: [{ value: 'browser', label: 'System voice' }, { value: 'openai', label: 'OpenAI TTS' }, { value: 'elevenlabs', label: 'ElevenLabs' }, { value: 'none', label: 'Off' }] },

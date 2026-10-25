@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Plus, RefreshCw, Sparkles, X } from 'lucide-react';
+import { Download, History, Plus, RefreshCw, RotateCcw, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { del, get, patch, post, put } from '../lib/api';
 import { setState, toast, useStore } from '../lib/store';
 import { t } from '../lib/i18n';
@@ -8,13 +8,32 @@ import { Badge, Empty, Field, Modal, SearchBox, Tabs, Toggle } from '../componen
 import { Markdown } from '../components/Message';
 import { parseFrontmatter } from '../lib/frontmatter';
 
+interface PruneCandidate {
+  name: string;
+  reason: string;
+  uses: number;
+  ok: number;
+  failed: number;
+}
+
+interface Revision {
+  version: string;
+  savedAt: number;
+  reason: string;
+}
+
 function SkillDetail({ skill, onClose, onChanged }: { skill: SkillInfo; onClose: () => void; onChanged: () => void }) {
   const [content, setContent] = useState('');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  useEffect(() => {
-    void get<{ content: string }>(`/api/skills/${encodeURIComponent(skill.name)}`).then((r) => setContent(r.content));
-  }, [skill.name]);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
+  const path = `/api/skills/${encodeURIComponent(skill.name)}`;
+  const reload = () => {
+    void get<{ content: string }>(path).then((r) => setContent(r.content));
+    if (skill.editable) void get<{ revisions: Revision[] }>(`${path}/history`).then((r) => setRevisions(r.revisions));
+  };
+  useEffect(reload, [skill.name]);
+  const outcomes = (skill.ok ?? 0) + (skill.failed ?? 0);
   const { body } = parseFrontmatter(content);
   return (
     <Modal open onClose={onClose} wide>
@@ -31,6 +50,7 @@ function SkillDetail({ skill, onClose, onChanged }: { skill: SkillInfo; onClose:
           <Badge tone={skill.source === 'user' ? 'accent' : 'neutral'}>{skill.source}</Badge>
           {skill.version && <Badge>v{skill.version}</Badge>}
           {skill.uses ? <Badge tone="ok">{skill.uses} uses</Badge> : null}
+          {outcomes > 0 && <Badge tone={(skill.failed ?? 0) > (skill.ok ?? 0) ? 'warn' : 'ok'}>{skill.ok ?? 0}/{outcomes} runs succeeded</Badge>}
           {skill.tags.map((tg) => (
             <Badge key={tg}>#{tg}</Badge>
           ))}
@@ -43,6 +63,33 @@ function SkillDetail({ skill, onClose, onChanged }: { skill: SkillInfo; onClose:
           </div>
         )}
         {skill.files.length > 0 && <div className="muted small">Files: {skill.files.join(', ')}</div>}
+        {revisions.length > 0 && (
+          <div className="skill-history">
+            <div className="skill-history-title">
+              <History size={13} /> Earlier versions
+            </div>
+            {revisions.slice(0, 6).map((r) => (
+              <div key={`${r.version}-${r.savedAt}`} className="skill-history-row">
+                <span className="mono">v{r.version}</span>
+                <span className="muted small">
+                  {new Date(r.savedAt).toLocaleString()} · before {r.reason}
+                </span>
+                <div className="flex-1" />
+                <button
+                  className="btn small"
+                  onClick={async () => {
+                    await post(`${path}/rollback`, { version: r.version });
+                    toast(`Restored v${r.version}`);
+                    reload();
+                    onChanged();
+                  }}
+                >
+                  <RotateCcw size={12} /> Restore
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="modal-actions">
           <span className="muted small">{skill.path}</span>
           <div className="flex-1" />
@@ -181,7 +228,12 @@ function SkillsTab({ query }: { query: string }) {
   const [open, setOpen] = useState<SkillInfo | null>(null);
   const [creating, setCreating] = useState(false);
   const [installing, setInstalling] = useState(false);
-  const load = () => void get<{ skills: SkillInfo[] }>('/api/skills').then((r) => setSkills(r.skills));
+  const [stale, setStale] = useState<PruneCandidate[]>([]);
+  const [reviewing, setReviewing] = useState(false);
+  const load = () => {
+    void get<{ skills: SkillInfo[] }>('/api/skills').then((r) => setSkills(r.skills));
+    void get<PruneCandidate[]>('/api/skills/prune').then(setStale).catch(() => setStale([]));
+  };
   useEffect(load, []);
   const cats = useMemo(() => {
     const m: Record<string, number> = {};
@@ -207,6 +259,15 @@ function SkillsTab({ query }: { query: string }) {
           <Plus size={13} /> {t('common.new')}
         </button>
       </div>
+      {stale.length > 0 && (
+        <button className="skill-review" onClick={() => setReviewing(true)}>
+          <TriangleAlert size={14} />
+          <span>
+            {stale.length} skill{stale.length > 1 ? 's' : ''} Kronos wrote {stale.length > 1 ? 'look' : 'looks'} unused or keep failing
+          </span>
+          <b>Review</b>
+        </button>
+      )}
       {grouped.map(([category, items]) => (
         <section key={category} className="list-section">
           <h4 className="list-cat">{category}</h4>
@@ -235,6 +296,33 @@ function SkillsTab({ query }: { query: string }) {
       {open && <SkillDetail skill={open} onClose={() => setOpen(null)} onChanged={load} />}
       {creating && <NewSkill onClose={() => setCreating(false)} onDone={load} />}
       {installing && <InstallSkill onClose={() => setInstalling(false)} onDone={load} />}
+      {reviewing && (
+        <Modal open onClose={() => setReviewing(false)}>
+          <h2>Review skills</h2>
+          <p className="muted">Skills that stop helping are worth removing: they cost context and can mislead. Removed skills stay in history and can be restored.</p>
+          {stale.map((p) => (
+            <div key={p.name} className="list-row">
+              <div className="list-main">
+                <div className="list-title">{p.name}</div>
+                <div className="list-desc">
+                  {p.reason} · {p.uses} uses · {p.ok} ok · {p.failed} failed
+                </div>
+              </div>
+              <button
+                className="btn small danger-outline"
+                onClick={async () => {
+                  await del(`/api/skills/${encodeURIComponent(p.name)}`);
+                  toast(`Removed ${p.name}`);
+                  load();
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          {!stale.length && <Empty title="Nothing left to review" />}
+        </Modal>
+      )}
     </>
   );
 }

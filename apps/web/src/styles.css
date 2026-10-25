@@ -4116,3 +4116,52 @@ button.sb-item:hover,
   content-visibility: auto;
   contain-intrinsic-size: auto 320px;
 }
+
+/* ---------------------------------------------------------------- skill governance */
+
+.skill-history {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill-history-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82em;
+  color: var(--dim);
+}
+
+.skill-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-review {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 4px 0 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--text);
+  font-size: 0.88em;
+  text-align: left;
+}
+
+.skill-review svg {
+  color: var(--warning);
+}
+
+.skill-review b {
+  margin-left: auto;
+  font-weight: 550;
+}

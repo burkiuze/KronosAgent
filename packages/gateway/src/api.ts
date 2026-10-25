@@ -294,10 +294,27 @@ export function buildApi(gw: Gateway): Router {
     const k = rt();
     const stats = k.skillStats();
     return {
-      skills: k.skills.list({ includeDisabled: true }).map((s) => ({ ...s, uses: stats[s.name]?.uses ?? 0, lastUsed: stats[s.name]?.lastUsed ?? null })),
+      skills: k.skills.list({ includeDisabled: true }).map((s) => ({
+        ...s,
+        uses: stats[s.name]?.uses ?? 0,
+        lastUsed: stats[s.name]?.lastUsed ?? null,
+        ok: stats[s.name]?.ok ?? 0,
+        failed: stats[s.name]?.failed ?? 0,
+      })),
       categories: k.skills.categories(),
       userDir: k.paths.skills,
     };
+  });
+  // agent-written skills that stopped helping (registered before /:name so "prune" is not read as a name)
+  r.get('/api/skills/prune', () => rt().skillPruneCandidates());
+  r.get('/api/skills/:name/history', (req) => {
+    const k = rt();
+    const name = req.params.name as string;
+    return { current: k.skills.get(name)?.version ?? null, revisions: k.skills.history(name).map(({ version, savedAt, reason }) => ({ version, savedAt, reason })) };
+  });
+  r.post('/api/skills/:name/rollback', async (req) => {
+    const b = await req.body<{ version?: string }>().catch(() => ({}) as { version?: string });
+    return rt().skills.rollback(req.params.name as string, b.version);
   });
   r.get('/api/skills/:name', (req) => {
     const k = rt();

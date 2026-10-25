@@ -7,7 +7,7 @@
 **One self-improving agent for your terminal, your desktop and every chat app you use.**
 It codes, researches, automates and remembers — with any model, on your machine.
 
-[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Türkçe](#türkçe)
+[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Research](docs/RESEARCH.md) · [Türkçe](#türkçe)
 
 <img src="docs/assets/chat-dark.png" alt="Kronos desktop: chat with tool calls, live plan and the files panel" width="900" />
 
@@ -61,10 +61,16 @@ skills, automations and the permission flow before you pick a provider.
 ## What you get
 
 ### An agent that does real work
-- **33 built-in tools** in 19 toolsets: read/write/edit/multi-edit/apply-patch files, glob and
+- **35 built-in tools** in 19 toolsets: read/write/edit/multi-edit/apply-patch files, glob and
   grep, shell with background processes, sandboxed code execution, web search & fetch, a real
   browser (Playwright), HTTP/API calls, image generation and vision, text-to-speech, artifacts,
-  messaging, planning (live todo list), clarifying questions, and **parallel subagents**.
+  messaging, planning (live todo list), clarifying questions, and **parallel subagents** that
+  coordinate through a **shared team board** (claims, posts — no coordinator needed).
+- **Verification built into the harness**: Kronos detects how your project checks itself (npm/pnpm
+  /yarn/bun scripts, pytest/ruff/mypy, cargo, go, deno, Makefile, …), runs it with the `verify`
+  tool, and if it changed files without verifying, it verifies before it reports back.
+- **Codemaster** effort: maximum reasoning plus a principal-engineer workflow — plan with
+  acceptance checks, propose → probe → compose for hard decisions, verify, independent review.
 - **Streaming everything**: thinking summaries, text, tool input as it is generated, tool
   progress, diffs, todos and subagent activity — in the CLI, the app and chat platforms.
 - **Parallel-safe tool execution**, automatic context compaction, retries with backoff and a
@@ -85,6 +91,12 @@ any OpenAI-compatible endpoint as a custom provider. Hermes-style models that em
   research, PDF tools, spreadsheet analysis, release notes, daily briefing, Docker deploy, …),
   install more from any git repo, and Kronos **writes and patches its own skills** after it
   solves something hard. Only names and descriptions sit in context; bodies load on demand.
+  Self-improvement is **governed**: an admission check (reusable, no secrets or task-specific
+  values, no duplicates), a per-session edit budget, version history with rollback, and pruning
+  of skills that stop helping.
+- **`kronos eval`**: run a suite several times per model × effort configuration in isolated
+  runtimes and get pass rate ± spread, tokens, cost, time and tool calls — measure before you
+  trust a change.
 - **Personas & profiles**: `SOUL.md` personality, 7 built-in styles, and isolated profiles
   (work / personal / family bot) each with their own memory, skills, sessions and keys.
 
@@ -142,7 +154,8 @@ kronos -c                                    # continue the last CLI session
 
 kronos model list | set openrouter:qwen/qwen3-coder
 kronos keys set ANTHROPIC_API_KEY
-kronos skills list | install <git-url> | create
+kronos skills list | install <git-url> | create | history <name> | rollback <name> | prune
+kronos eval examples/evals/smoke.yaml --repeats 3 --model sonnet,opus   # measure, with spread
 kronos cron add "every monday at 9am" "Draft the weekly status report" --deliver telegram:<chat>
 kronos mcp add github -- npx -y @modelcontextprotocol/server-github
 kronos profile create work && kronos -p work
@@ -163,7 +176,7 @@ packages/cli       kronos-agent     the `kronos` command: REPL, subcommands, set
 apps/web           @kronos/web      React UI served by the gateway
 apps/desktop       @kronos/desktop  Electron shell: embedded gateway, tray, shortcuts, updates
 skills/                             bundled skills (SKILL.md)
-docs/                               analysis, architecture, configuration, messaging, security, performance
+docs/                               analysis, architecture, configuration, messaging, security, performance, research
 ```
 
 ```bash
@@ -212,10 +225,15 @@ Arayüz İngilizcedir; Kronos ise sana senin dilinde yanıt verir.
 
 ### Öne çıkanlar
 
-- **33 yerleşik araç**: dosya okuma/yazma/düzenleme ve yama, glob/grep, arka plan süreçli
+- **35 yerleşik araç**: dosya okuma/yazma/düzenleme ve yama, glob/grep, arka plan süreçli
   kabuk, kod çalıştırma, web arama ve sayfa okuma, gerçek tarayıcı, HTTP/API çağrıları, görsel
   üretme ve görme, seslendirme, artifact'ler, mesaj gönderme, canlı görev listesi, soru sorma ve
-  **paralel alt ajanlar**.
+  ortak bir **ekip panosu** üzerinden koordine olan **paralel alt ajanlar**.
+- **Doğrulama sistemin parçası**: Kronos projenin kendi test/tip/lint/build komutlarını bulur,
+  `verify` aracıyla çalıştırır; dosya değiştirip doğrulamadıysa bitirmeden önce doğrular.
+- **Yönetilen öz-gelişim**: ajanın yazdığı yetenekler kabul kontrolünden geçer, oturum başına
+  düzenleme bütçesi, sürüm geçmişi ve geri alma vardır; işe yaramayan yetenekler ayıklanır.
+  `kronos eval` ile değişiklikleri tekrar tekrar ölçün (başarı oranı ± sapma, token, maliyet).
 - **Her model**: Anthropic (varsayılan Claude Opus 5.5), OpenAI, Gemini, OpenRouter, Groq,
   DeepSeek, Mistral, xAI, NVIDIA, Nous, Together, Fireworks, Cerebras, Moonshot, Z.ai, yerelde
   **Ollama** ve **LM Studio**, ayrıca her OpenAI uyumlu uç nokta. Yedek model zinciri desteklenir.

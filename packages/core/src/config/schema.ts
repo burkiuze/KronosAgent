@@ -84,6 +84,8 @@ export interface KronosConfig {
     compaction: { enabled: boolean; threshold: number; keepRecentTurns: number };
     subagents: { maxConcurrent: number; maxDepth: number; maxIterations: number };
     nudges: { memoryEvery: number; skillAfterToolCalls: number };
+    /** when a run edited files but never ran verify afterwards, ask for verification once before finishing */
+    verifyBeforeFinish: boolean;
   };
   toolsets: { enabled: string[]; disabled: string[] };
   terminal: {
@@ -117,6 +119,10 @@ export interface KronosConfig {
     disabled: string[];
     autoCreate: boolean;
     claudeCompat: boolean;
+    /** skill creations/edits the agent may make in one session (keeps self-modification deliberate) */
+    editBudget: number;
+    /** agent-written skills unused this many days become prune candidates */
+    staleAfterDays: number;
   };
   web: {
     search: { provider: 'auto' | 'duckduckgo' | 'brave' | 'tavily' | 'exa' | 'searxng' | 'serper' | 'jina'; apiKey?: string; url?: string };
@@ -225,6 +231,7 @@ export function defaultConfig(): KronosConfig {
       compaction: { enabled: true, threshold: 0.8, keepRecentTurns: 2 },
       subagents: { maxConcurrent: 4, maxDepth: 2, maxIterations: 60 },
       nudges: { memoryEvery: 12, skillAfterToolCalls: 18 },
+      verifyBeforeFinish: true,
     },
     toolsets: { enabled: [...ALL_TOOLSETS], disabled: [] },
     terminal: {
@@ -245,7 +252,7 @@ export function defaultConfig(): KronosConfig {
       protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '/etc/shadow'],
     },
     memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false },
-    skills: { enabled: true, dirs: [], disabled: [], autoCreate: true, claudeCompat: true },
+    skills: { enabled: true, dirs: [], disabled: [], autoCreate: true, claudeCompat: true, editBudget: 3, staleAfterDays: 60 },
     web: {
       search: { provider: 'auto' },
       fetch: { maxChars: 60000, userAgent: 'Mozilla/5.0 (compatible; KronosAgent/1.0; +https://github.com/burkiuze/KronosAgent)' },

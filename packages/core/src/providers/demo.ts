@@ -25,6 +25,10 @@ export class DemoProvider implements Provider {
       text = JSON.stringify(demoFacts(lastUserText(req.messages)));
     } else if (/summariz/i.test(req.system) && !req.tools.length) {
       text = summaryFor(req.messages);
+    } else if (last?.role === 'system' && /have not run verify/.test(messagePlain(last)) && tools.has('verify')) {
+      thinking = 'The harness asked me to verify the change before finishing.';
+      text = 'Verifying the change.';
+      calls.push(call('verify', {}));
     } else if (last && (last.role === 'tool' || last.parts.some((p) => p.type === 'tool_result'))) {
       thinking = 'The tools returned results. Summarize them clearly for the user.';
       text = afterTools(last, req.messages);
@@ -87,6 +91,10 @@ function* chunks(text: string, size: number): Generator<string> {
   if (buf) yield buf;
 }
 
+function messagePlain(m: Message): string {
+  return m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
+}
+
 function lastUserText(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i] as Message;
@@ -124,6 +132,9 @@ function route(input: string, tools: Set<string>): Plan {
       text: 'Delegating to two subagents in parallel.',
       calls: [call('delegate', { tasks: [{ task: 'List the files in the workspace and report the count', label: 'files' }, { task: 'Report the current date', label: 'date' }] })],
     };
+  }
+  if (/^(verify|check (it|the work)|run the (tests|checks)|doğrula)\b/.test(lower) && has('verify')) {
+    return { thinking: "Run the project's own checks.", text: 'Running the project checks.', calls: [call('verify', {})] };
   }
   if ((m = /^\$\s+(.+)$/s.exec(t)) || (m = /^(?:run|execute|çalıştır)\s+[`"]?(.+?)[`"]?$/is.exec(t))) {
     if (has('shell')) return { thinking: `The user wants to run a shell command: ${m[1]}`, text: 'Running it now.', calls: [call('shell', { command: m[1] })] };
@@ -245,6 +256,9 @@ function afterTools(toolMsg: Message, history: Message[]): string {
         break;
       case 'write_file':
         lines.push(`Done — ${firstLine(body)}.`);
+        break;
+      case 'verify':
+        lines.push(`Verification: ${firstLine(body)}`);
         break;
       default:
         lines.push(`**${r.toolName}**: ${truncate(body, 1200)}`);

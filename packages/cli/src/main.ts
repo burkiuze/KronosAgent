@@ -12,6 +12,9 @@ import {
   formatTokens,
   getPath,
   listProfiles,
+  parseEvalSuite,
+  evalConfigs,
+  runEvalSuite,
   maskSecrets,
   serveMcp,
   setActiveProfile,
@@ -43,7 +46,8 @@ ${c.bold('Usage')}
 ${c.bold('Manage')}
   kronos model [list|set <ref>]   models & providers        kronos keys [list|set|unset]
   kronos config [show|get|set|path|edit]                    kronos profile [list|create|use|delete]
-  kronos skills [list|show|enable|disable|install|create]   kronos sessions [list|show|export|delete|search]
+  kronos skills [list|show|enable|disable|install|create|history|rollback|prune]
+  kronos sessions [list|show|export|delete|search]          kronos eval <suite.yaml> [--repeats N] [--model a,b] [--effort low,high] [--out report.json]
   kronos cron [list|add|remove|run|pause|resume]            kronos memory [show|add|search|clear]
   kronos mcp [list|add|remove|serve]                        kronos pairing [list|approve <code>]
   kronos import <hermes|openclaw|claude|codex|cursor>       kronos insights [--days N]
@@ -132,6 +136,8 @@ export async function main(argv: string[]): Promise<void> {
   switch (cmd) {
     case 'run':
       return cmdRun(args, pos);
+    case 'eval':
+      return withRt(args, (rt) => cmdEval(rt, pos, args));
     case 'gateway':
     case 'serve':
       return cmdGateway(args, false);
@@ -403,6 +409,32 @@ async function cmdSkills(rt: Kronos, pos: string[], args: ParsedArgs): Promise<v
     case 'path':
       console.log(rt.paths.skills);
       return;
+    case 'history': {
+      const current = rt.skills.get(name ?? '');
+      const revs = rt.skills.history(name ?? '');
+      console.log(`${c.bold(name ?? '')} ${c.gray(current ? `current v${current.version ?? '1.0.0'}` : 'deleted')}`);
+      for (const r of revs) console.log(`  v${r.version.padEnd(10)} ${new Date(r.savedAt).toISOString().slice(0, 16).replace('T', ' ')}  ${c.gray(r.reason)}`);
+      if (!revs.length) console.log(c.gray('  no earlier versions'));
+      return;
+    }
+    case 'rollback': {
+      const s = rt.skills.rollback(name ?? '', rest[0] ?? flagStr(args, 'version'));
+      console.log(`${c.green(sym.ok)} ${s.name} restored to v${s.version}`);
+      return;
+    }
+    case 'prune': {
+      const list = rt.skillPruneCandidates();
+      if (!list.length) {
+        console.log(c.gray('Nothing to prune: every agent-written skill is in use and mostly succeeding.'));
+        return;
+      }
+      for (const p of list) console.log(`  ${c.gold(p.name.padEnd(28))} ${p.reason} ${c.gray(`(${p.uses} uses · ${p.ok} ok · ${p.failed} failed)`)}`);
+      if (args.flags.apply) {
+        for (const p of list) rt.skills.delete(p.name);
+        console.log(`${c.green(sym.ok)} removed ${list.length} skill(s); \`kronos skills rollback <name>\` restores any of them`);
+      } else console.log(c.gray('\nRun with --apply to remove them (each stays restorable with `kronos skills rollback <name>`).'));
+      return;
+    }
     default: {
       const list = rt.skills.list({ includeDisabled: true });
       let cat = '';
@@ -415,6 +447,78 @@ async function cmdSkills(rt: Kronos, pos: string[], args: ParsedArgs): Promise<v
       }
       console.log(c.gray(`\n${list.length} skills · user skills in ${rt.paths.skills}`));
     }
+  }
+}
+
+/**
+ * Run an evaluation suite: every case × repeat × (model, effort) in a fresh, isolated runtime,
+ * then report pass rate with its run-to-run spread, tokens, cost, time and tool calls.
+ */
+async function cmdEval(rt: Kronos, pos: string[], args: ParsedArgs): Promise<void> {
+  const file = pos[0];
+  if (!file || !existsSync(file)) throw new Error('usage: kronos eval <suite.yaml> [--repeats N] [--model a,b] [--effort low,high] [--out report.json]');
+  const suite = parseEvalSuite(readFileSync(file, 'utf8'), file.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, ''));
+  const list = (v: string | undefined) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
+  const models = list(flagStr(args, 'model'));
+  const efforts = list(flagStr(args, 'effort'));
+  if (models) suite.matrix.model = models;
+  if (efforts) suite.matrix.effort = efforts as typeof suite.matrix.effort;
+  const repeats = flagStr(args, 'repeats') ? Math.max(1, Number(flagStr(args, 'repeats'))) : suite.repeats;
+  const configs = evalConfigs(suite, { model: rt.config.model.default, effort: rt.config.model.effort });
+  const total = configs.length * suite.cases.length * repeats;
+  console.log(`${c.bold(`Eval: ${suite.name}`)} ${c.gray(`${suite.cases.length} case(s) × ${repeats} repeat(s) × ${configs.length} config(s) = ${total} runs`)}`);
+  const base = rt.config;
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  process.once('SIGINT', onSigint);
+  try {
+    const { runs, summary } = await runEvalSuite(suite, configs, {
+      repeats,
+      signal: controller.signal,
+      // isolated home per run: no memory, skills or sessions carry over between runs
+      createRuntime: (cfg, home) =>
+        Kronos.create({
+          home,
+          cwd: home,
+          connectMcp: false,
+          logLevel: 'silent',
+          overrides: {
+            model: { ...base.model, default: cfg.model, effort: cfg.effort },
+            providers: base.providers,
+            customProviders: base.customProviders,
+            skills: { ...base.skills, claudeCompat: false },
+            memory: { ...base.memory, autoExtract: false },
+            agent: { ...base.agent, autoTitle: false },
+          },
+        }),
+      onRun: (r, p) => {
+        const mark = r.passed ? c.green(sym.ok) : c.red('✗');
+        const why = r.passed ? '' : c.gray(` — ${r.error ?? r.checks.filter((x) => !x.ok).map((x) => x.label).join(', ')}`);
+        console.log(`  ${c.gray(`[${p.done}/${p.total}]`)} ${mark} ${r.case} ${c.gray(`· ${r.config} · #${r.repeat} · ${(r.durationMs / 1000).toFixed(1)}s · ${formatTokens(r.tokens)} tok`)}${why}`);
+      },
+    });
+    const rows = [['config', 'pass rate', '± sd', 'runs', 'tokens/run', 'cost/run', 'time/run', 'tool calls/run']];
+    for (const s of summary)
+      rows.push([
+        s.config,
+        `${(s.passRate * 100).toFixed(0)}%`,
+        `${(s.stdev * 100).toFixed(0)}%`,
+        String(s.runs),
+        formatTokens(Math.round(s.meanTokens)),
+        formatCost(s.meanCostUsd),
+        `${(s.meanDurationMs / 1000).toFixed(1)}s`,
+        s.meanToolCalls.toFixed(1),
+      ]);
+    console.log(`\n${table(rows)}`);
+    if (repeats < 3) console.log(c.gray('\nTip: use --repeats 3 or more; the same configuration varies a lot between runs.'));
+    const out = flagStr(args, 'out');
+    if (out) {
+      writeFileSync(out, JSON.stringify({ suite: suite.name, repeats, configs, summary, runs }, null, 2));
+      console.log(c.gray(`report written to ${out}`));
+    }
+    if (args.flags.json) console.log(JSON.stringify({ summary }, null, 2));
+  } finally {
+    process.off('SIGINT', onSigint);
   }
 }
 

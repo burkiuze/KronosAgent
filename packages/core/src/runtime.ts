@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 import { homedir } from 'node:os';
 import type { AgentEvent, FilePart, ImagePart, PermissionMode, UserInput } from './types.js';
@@ -69,6 +69,13 @@ export type MessagingBridge = (platform: PlatformId, target: string, text: strin
  * skills, sessions, artifacts, cron, MCP connections and live agents. Every surface
  * (CLI, gateway/desktop, messaging adapters, MCP server) is a thin layer over it.
  */
+export interface SkillStats {
+  uses: number;
+  lastUsed: number;
+  ok?: number;
+  failed?: number;
+}
+
 export class Kronos {
   readonly events = new Emitter<RuntimeEvent>();
   readonly home: string;
@@ -218,25 +225,69 @@ export class Kronos {
     return defs;
   }
 
-  recordSkillUse(name: string): void {
+  private updateSkillStats(fn: (stats: Record<string, SkillStats>) => void): void {
     try {
-      const stats = existsSync(this.skillStatsFile) ? (JSON.parse(readFileSync(this.skillStatsFile, 'utf8')) as Record<string, { uses: number; lastUsed: number }>) : {};
-      const s = stats[name] ?? { uses: 0, lastUsed: 0 };
-      s.uses += 1;
-      s.lastUsed = Date.now();
-      stats[name] = s;
+      const stats = this.skillStats();
+      fn(stats);
       writeFileSync(this.skillStatsFile, JSON.stringify(stats, null, 2));
     } catch {
       /* best effort */
     }
   }
 
-  skillStats(): Record<string, { uses: number; lastUsed: number }> {
+  recordSkillUse(name: string): void {
+    this.updateSkillStats((stats) => {
+      const s = (stats[name] ??= { uses: 0, lastUsed: 0, ok: 0, failed: 0 });
+      s.uses += 1;
+      s.lastUsed = Date.now();
+    });
+  }
+
+  /** How runs that used these skills ended (clean finish with no failed verification = ok). */
+  recordSkillOutcome(names: string[], ok: boolean): void {
+    this.updateSkillStats((stats) => {
+      for (const name of names) {
+        const s = (stats[name] ??= { uses: 0, lastUsed: Date.now(), ok: 0, failed: 0 });
+        if (ok) s.ok = (s.ok ?? 0) + 1;
+        else s.failed = (s.failed ?? 0) + 1;
+      }
+    });
+  }
+
+  skillStats(): Record<string, SkillStats> {
     try {
       return existsSync(this.skillStatsFile) ? JSON.parse(readFileSync(this.skillStatsFile, 'utf8')) : {};
     } catch {
       return {};
     }
+  }
+
+  /**
+   * Agent-written skills that stopped earning their place: never or no longer used, or failing
+   * more often than not. Components that stop helping get pruned; nothing is deleted here —
+   * callers show the list or delete with history kept (`skills.rollback` restores).
+   */
+  skillPruneCandidates(now = Date.now()): { name: string; reason: string; uses: number; lastUsed: number | null; ok: number; failed: number }[] {
+    const stats = this.skillStats();
+    const staleMs = this.config.skills.staleAfterDays * 86_400_000;
+    const out: { name: string; reason: string; uses: number; lastUsed: number | null; ok: number; failed: number }[] = [];
+    for (const skill of this.skills.list({ includeDisabled: true })) {
+      if (skill.source !== 'user' || skill.author !== 'kronos') continue;
+      const s = stats[skill.name];
+      const created = (() => {
+        try {
+          return statSync(skill.path).birthtimeMs || statSync(skill.path).mtimeMs;
+        } catch {
+          return now;
+        }
+      })();
+      const lastUsed = s?.lastUsed || null;
+      const row = { name: skill.name, uses: s?.uses ?? 0, lastUsed, ok: s?.ok ?? 0, failed: s?.failed ?? 0 };
+      if (!lastUsed && now - created > staleMs) out.push({ ...row, reason: `never used in ${this.config.skills.staleAfterDays} days` });
+      else if (lastUsed && now - lastUsed > staleMs) out.push({ ...row, reason: `unused for ${Math.floor((now - lastUsed) / 86_400_000)} days` });
+      else if (row.ok + row.failed >= 4 && row.failed > row.ok) out.push({ ...row, reason: `runs that used it failed ${row.failed} of ${row.ok + row.failed} times` });
+    }
+    return out;
   }
 
   emitAgentEvent(sessionId: string, event: AgentEvent): void {

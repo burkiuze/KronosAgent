@@ -194,6 +194,8 @@ export interface SkillInfo {
   editable: boolean;
   files: string[];
   uses?: number;
+  ok?: number;
+  failed?: number;
 }
 
 export interface ToolsetStatus {

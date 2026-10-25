@@ -26,6 +26,8 @@ import type { ToolContext, ToolDefinition } from '../tools/types.js';
 import { resolveRisk } from '../tools/types.js';
 import type { AgentDefinition } from './definitions.js';
 import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
+import { detectProjectChecks } from './checks.js';
+import { TeamBoard } from './board.js';
 import { PermissionPolicy, primaryArg } from '../safety/permissions.js';
 import { validateInput } from '../util/schema.js';
 import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError } from '../util/misc.js';
@@ -48,6 +50,8 @@ export interface AgentOptions {
   autoApprove?: boolean;
   preloadSkills?: string[];
   toolFilter?: { only?: string[]; exclude?: string[] };
+  /** members of a delegated team share a board (see team_board) */
+  team?: { board: TeamBoard; member: string };
 }
 
 export interface AgentRunOptions {
@@ -111,6 +115,11 @@ export class Agent {
   private pendingPermissions = new Map<string, (d: PermissionDecision) => void>();
   private pendingClarify = new Map<string, (a: string) => void>();
   private readFiles = new Set<string>();
+  /** files changed by write tools since the last verify call in this run */
+  private editsSinceVerify = 0;
+  private verifyNudged = false;
+  private lastVerify: boolean | undefined;
+  private runSkills = new Set<string>();
   private skillUses = new Map<string, number>();
   private lastContextTokens = 0;
   private prePlanMode: PermissionMode = 'auto-edit';
@@ -189,6 +198,7 @@ export class Agent {
     const exclude = [...(this.opts.toolFilter?.exclude ?? [])];
     if (this.depth > 0) exclude.push('ask_user', 'exit_plan_mode');
     if (this.depth >= cfg.agent.subagents.maxDepth) exclude.push('delegate');
+    if (!this.opts.team) exclude.push('team_board');
     return this.rt.tools.resolve(enabled, this.rt, { only, exclude });
   }
 
@@ -230,6 +240,8 @@ export class Agent {
       subagent: this.depth > 0 ? { depth: this.depth, definition: this.opts.definition, context: this.opts.subagentContext } : undefined,
       preloadedSkills: preloaded,
       language: cfg.agent.language,
+      checks: detectProjectChecks(this.session.cwd),
+      team: this.opts.team ? { member: this.opts.team.member, teammates: this.opts.team.board.members.filter((m) => m !== this.opts.team!.member) } : undefined,
     });
     this.saveSession({ systemPrompt: prompt, toolNames: this.tools.map((t) => t.name) });
   }
@@ -306,7 +318,32 @@ export class Agent {
 
   noteSkillUse(name: string): void {
     this.skillUses.set(name, (this.skillUses.get(name) ?? 0) + 1);
+    this.runSkills.add(name);
     this.rt.recordSkillUse(name);
+  }
+
+  /** Result of the latest verify call; clears the "edited but unverified" state when it passed. */
+  noteVerification(ok: boolean): void {
+    this.lastVerify = ok;
+    this.editsSinceVerify = 0;
+  }
+
+  get team(): { board: TeamBoard; member: string } | undefined {
+    return this.opts.team;
+  }
+
+  /**
+   * Skill changes the agent may still make in this session. Self-modification is useful but
+   * overfits when unbounded, so each session gets a small budget (config skills.editBudget);
+   * the count lives in the session record so it survives a rebuilt agent.
+   */
+  skillEditsLeft(): number {
+    const used = Number(this.session.meta?.skillEdits ?? 0);
+    return Math.max(0, this.rt.config.skills.editBudget - used);
+  }
+
+  noteSkillEdit(): void {
+    this.saveSession({ meta: { ...this.session.meta, skillEdits: Number(this.session.meta?.skillEdits ?? 0) + 1 } });
   }
 
   // ---------------------------------------------------------------------------
@@ -390,6 +427,10 @@ export class Agent {
     opts.signal?.addEventListener('abort', onOuterAbort, { once: true });
     const signal = this.controller.signal;
 
+    this.editsSinceVerify = 0;
+    this.verifyNudged = false;
+    this.lastVerify = undefined;
+    this.runSkills.clear();
     let runUsage = emptyUsage();
     let finalText = '';
     let stop: StopReason = 'end_turn';
@@ -556,6 +597,26 @@ export class Agent {
         }
         if (res.stopReason === 'pause_turn') continue;
         if (!toolCalls.length) {
+          if (res.stopReason !== 'max_tokens' && iter < maxIter && this.shouldVerifyBeforeFinish()) {
+            // verification is a property of the harness, not a request in the prompt
+            this.verifyNudged = true;
+            this.notice('info', 'Asking for verification before finishing (files changed, no verify run since).');
+            this.append([
+              {
+                id: newId('m_'),
+                role: 'system',
+                parts: [
+                  {
+                    type: 'text',
+                    text: `You changed ${this.editsSinceVerify} file(s) in this run but have not run verify since. Run verify now (or the specific command that proves the change works), fix what fails and re-run until it passes, then give your final answer. If it truly cannot be verified here, say why in your answer instead.`,
+                  },
+                ],
+                createdAt: Date.now(),
+                meta: { kind: 'note' },
+              },
+            ]);
+            continue;
+          }
           finalText = textOf(res.parts);
           stop = res.stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn';
           break;
@@ -602,9 +663,21 @@ export class Agent {
     return this.finish(runId, started, finalText, stop, runUsage, error, toolCallCount);
   }
 
+  private shouldVerifyBeforeFinish(): boolean {
+    if (this.verifyNudged || this.editsSinceVerify === 0 || this.mode === 'plan') return false;
+    if (!this.rt.config.agent.verifyBeforeFinish || !this.toolSpecs.some((t) => t.name === 'verify')) return false;
+    // only when the project says how to verify itself; otherwise there is nothing concrete to ask for
+    return detectProjectChecks(this.session.cwd).length > 0;
+  }
+
   private finish(runId: string, started: number, text: string, stopReason: StopReason, usage: Usage, error: string | undefined, toolCalls: number): AgentRunResult {
     this.running = false;
     this.controller = undefined;
+    if (this.runSkills.size) {
+      // outcome per skill used: feeds pruning and the skill library's success rates
+      const ok = stopReason === 'end_turn' && !error && this.lastVerify !== false;
+      this.rt.recordSkillOutcome([...this.runSkills], ok);
+    }
     const durationMs = Date.now() - started;
     this.emit({ type: 'run_end', runId, stopReason, text, usage, durationMs, error });
     if (this.rt.hooks.has('stop')) {
@@ -754,6 +827,7 @@ export class Agent {
     } catch (e) {
       out = { content: isAbortError(e) ? 'Interrupted by the user.' : `Error: ${errorMessage(e)}`, isError: true };
     }
+    if (!out.isError && def.toolset === 'files' && resolveRisk(def, input) === 'write') this.editsSinceVerify += 1;
     let content = out.content ?? '';
     if (this.rt.config.safety.redactSecrets) content = redactSecrets(content);
     const limit = this.rt.config.agent.toolOutputLimit;
@@ -927,14 +1001,35 @@ export class Agent {
   // Delegation
   // ---------------------------------------------------------------------------
 
-  async delegate(tasks: DelegateTask[], opts: { context?: string; signal?: AbortSignal; parentToolCallId?: string } = {}): Promise<DelegateResult[]> {
+  async delegate(
+    tasks: DelegateTask[],
+    opts: { context?: string; signal?: AbortSignal; parentToolCallId?: string; onBoard?: (board: TeamBoard) => void } = {},
+  ): Promise<DelegateResult[]> {
     const cfg = this.rt.config.agent.subagents;
     if (this.depth >= cfg.maxDepth) throw new Error(`Maximum delegation depth (${cfg.maxDepth}) reached — do this work yourself.`);
     const defs = this.rt.agentDefinitions(this.session.cwd);
+    const defOf = (t: DelegateTask) => defs.find((d) => d.name === (t.agent ?? 'general')) ?? defs.find((d) => d.name === 'general');
+    // unique labels: they are the members' names on the board and in the UI
+    const labels: string[] = [];
+    for (const [i, t] of tasks.entries()) {
+      const base = t.label?.trim() || `${defOf(t)?.name ?? 'agent'} ${i + 1}`;
+      labels.push(labels.includes(base) ? `${base} (${i + 1})` : base);
+    }
+    // two or more agents form a team that coordinates through a shared board
+    const board = tasks.length > 1 ? new TeamBoard(labels) : undefined;
+    const agentIds = labels.map(() => newId('sub_'));
+    if (board) {
+      tasks.forEach((t, i) => board.add(truncate(t.task.split('\n')[0] ?? t.task, 120), labels[i]));
+      board.onPost = (p) => {
+        const i = labels.indexOf(p.author);
+        if (i >= 0) this.emit({ type: 'subagent', runId: this.currentRunId, agentId: agentIds[i] as string, label: p.author, status: 'running', detail: `📌 ${truncate(p.text, 160)}` });
+      };
+      opts.onBoard?.(board);
+    }
     return mapLimit(tasks, Math.max(1, cfg.maxConcurrent), async (t, i) => {
-      const def = defs.find((d) => d.name === (t.agent ?? 'general')) ?? defs.find((d) => d.name === 'general');
-      const label = t.label ?? `${def?.name ?? 'agent'} ${i + 1}`;
-      const agentId = newId('sub_');
+      const def = defOf(t);
+      const label = labels[i] as string;
+      const agentId = agentIds[i] as string;
       const started = Date.now();
       const modelRef = t.model ?? def?.model ?? this.rt.config.model.subagent ?? (this.session.model || undefined);
       const session = this.rt.sessions.create({
@@ -957,7 +1052,8 @@ export class Agent {
           ? (req) => this.opts.onPermission!({ ...req, summary: `[${label}] ${req.summary}` })
           : undefined,
         autoApprove: this.opts.autoApprove,
-        toolFilter: only ? { only: [...only, 'todo_write', 'skill_view', 'skills_list', 'memory'] } : undefined,
+        toolFilter: only ? { only: [...only, 'todo_write', 'skill_view', 'skills_list', 'memory', ...(board ? ['team_board'] : [])] } : undefined,
+        team: board ? { board, member: label } : undefined,
       });
       this.emit({ type: 'subagent', runId: this.currentRunId, agentId, label, status: 'start', detail: truncate(t.task, 200) });
       const off = child.events.on((e) => {
@@ -1092,12 +1188,21 @@ export { primaryArg };
 export function codemasterDirective(toolNames: string[]): string {
   const has = (n: string) => toolNames.includes(n);
   const steps = [
-    'Understand first: read the relevant code, configs and docs before changing anything; ask only if genuinely blocked.',
-    has('todo_write') ? 'Plan: write a todo list (todo_write) of concrete, verifiable steps and keep it updated as you go.' : 'Plan: state a short list of concrete, verifiable steps before starting.',
-    has('delegate') ? 'Explore in parallel: when the work spans several areas, delegate explorer/researcher subagents with self-contained briefs to gather context concurrently.' : '',
+    'Gather information before effort: read the relevant code, configs, docs and existing tests, and note the project checks listed in the environment. What you know about the task moves the result more than how long you work on it. Ask only if genuinely blocked.',
+    has('todo_write')
+      ? 'Plan with todo_write: concrete, verifiable steps, and write down up front what "done" means — which checks must pass and what behaviour must be observable.'
+      : 'Plan: list concrete, verifiable steps and state up front which checks must pass for the work to count as done.',
+    `For any decision that is not obvious (design, root cause, approach): propose two or three candidates, probe them cheaply side by side${
+      has('delegate') ? ' (a quick spike, a failing test, a measurement — in parallel via delegate when they are independent; delegated agents coordinate through a shared team board)' : ' (a quick spike, a failing test, a measurement)'
+    }, then compose the approach the evidence supports. Do not commit to the first idea untested.`,
     'Implement in small, coherent steps that match the existing style; prefer root-cause fixes over workarounds.',
-    'Verify with evidence: run the relevant tests, type-checks, linters and builds; reproduce bugs before fixing them; never claim success you have not observed.',
-    has('delegate') ? 'Review before finishing: delegate a reviewer subagent to critique the full diff for bugs, edge cases, security and missing tests, then fix every finding that holds up.' : 'Review before finishing: re-read the full diff adversarially for bugs, edge cases, security and missing tests, and fix what you find.',
+    has('verify')
+      ? 'Verify with the verify tool after each meaningful change and before finishing; reproduce bugs as failing checks before fixing them. Never claim success that a check has not shown.'
+      : 'Verify with evidence: run the relevant tests, type-checks, linters and builds; reproduce bugs before fixing them; never claim success you have not observed.',
+    has('delegate')
+      ? 'Review before finishing: delegate a reviewer subagent to critique the full diff for bugs, edge cases, security and missing tests, then fix every finding that holds up and verify again.'
+      : 'Review before finishing: re-read the full diff adversarially for bugs, edge cases, security and missing tests, fix what you find and verify again.',
+    has('skill_manage') ? 'Learn: if a reusable procedure emerged, capture it or fix the skill you used (skill_manage) — general steps only, no task-specific values.' : '',
     'Report: what changed and why, how it was verified (commands and results), and any remaining risks or follow-ups.',
   ].filter(Boolean);
   return `CODEMASTER MODE is on. The user wants the most thorough, highest-quality result and accepts extra time and cost. Work like a principal engineer:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;

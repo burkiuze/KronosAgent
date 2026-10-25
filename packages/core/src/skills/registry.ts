@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { parseFrontmatter, stringifyFrontmatter } from '../util/frontmatter.js';
@@ -36,6 +37,42 @@ export interface SkillDirs {
 
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
+/** A saved copy of a skill taken before it was changed or deleted. */
+export interface SkillRevision {
+  version: string;
+  savedAt: number;
+  reason: string;
+  dir: string;
+}
+
+/** Why a proposed skill (or change) was not admitted. Empty = admitted. */
+export interface AdmissionResult {
+  ok: boolean;
+  problems: string[];
+}
+
+const MAX_BODY = 24_000;
+const SECRET_RE = /(sk-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/;
+// values that only make sense for the task at hand: a skill holding them has learned the
+// instance, not the procedure (the harness equivalent of overfitting to a benchmark)
+const SPECIFIC_RE: [RegExp, string][] = [
+  [/(^|[\s"'`(])\/(tmp|private\/var\/folders|var\/folders)\/[\w.-]+/m, 'a temporary directory path'],
+  [/\b[sr]_[a-z0-9]{10,}\b|\bsession [0-9a-f-]{16,}\b/i, 'a session or run id'],
+  [/\b[0-9a-f]{32,}\b/i, 'a long hash or token-like value'],
+  [/\bkronos-[a-z]+-[A-Za-z0-9]{6}\b/, 'a throwaway workspace name'],
+];
+
+const tokens = (text: string) => new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+function jaccard(a: string, b: string): number {
+  const x = tokens(a);
+  const y = tokens(b);
+  if (!x.size || !y.size) return 0;
+  let inter = 0;
+  for (const t of x) if (y.has(t)) inter++;
+  return inter / (x.size + y.size - inter);
+}
+const hash = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
 function listFiles(dir: string, base = dir, out: string[] = [], depth = 0): string[] {
   if (depth > 3 || out.length > 200) return out;
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -65,6 +102,142 @@ export class SkillRegistry {
     this.dirs = dirs;
     this.disabled = new Set(disabled);
     this.reload();
+  }
+
+  /** <user skills>/.history — skipped by discovery because it starts with a dot */
+  private get historyRoot(): string {
+    return join(this.dirs.user, '.history');
+  }
+
+  /**
+   * Admission gate for skills the agent writes. A skill library that only grows becomes noise,
+   * and edits tuned to one task hurt the next, so a new skill or a change is admitted only if it
+   * is reusable: bounded size, a description that says when to use it, no secrets, no values
+   * tied to one task, not a near-duplicate of an existing skill, and not a change that was
+   * already tried and rolled back.
+   */
+  admit(input: { name: string; description?: string; body?: string; existing?: string }): AdmissionResult {
+    const candidate = { ...input, name: slugify(input.name, 64) };
+    const problems: string[] = [];
+    const text = `${candidate.description ?? ''}\n${candidate.body ?? ''}`;
+    if ((candidate.body ?? '').length > MAX_BODY) problems.push(`the body is ${candidate.body!.length.toLocaleString()} chars; keep SKILL.md under ${MAX_BODY.toLocaleString()} and move long material into resource files`);
+    if (candidate.description !== undefined && candidate.description.trim().length < 20) problems.push('the description must say what the skill does and when to use it (at least a sentence)');
+    if (SECRET_RE.test(text)) problems.push('it contains what looks like a secret (API key, token or private key) — never store credentials in skills');
+    for (const [re, what] of SPECIFIC_RE) if (re.test(text)) problems.push(`it contains ${what}; replace task-specific values with placeholders or parameters so the skill is reusable`);
+    if (!candidate.existing && candidate.description) {
+      const flat = (n: string) => n.replace(/[-_.]/g, '');
+      // an editable skill of the same name, or one that reads the same, is a duplicate;
+      // shadowing a bundled skill with a user copy of the same name stays allowed
+      const twin = this.list({ includeDisabled: true }).find((s) =>
+        s.name === candidate.name ? s.editable : flat(s.name) === flat(candidate.name) || jaccard(s.description, candidate.description!) >= 0.6,
+      );
+      if (twin) problems.push(`it duplicates the existing skill "${twin.name}" (${twin.description.slice(0, 120)}) — patch that skill instead of creating a new one`);
+    }
+    if (candidate.existing !== undefined && candidate.body !== undefined && this.wasRolledBack(candidate.name, candidate.body)) {
+      problems.push('this exact change was tried before and rolled back; propose a different fix');
+    }
+    return { ok: problems.length === 0, problems };
+  }
+
+  /** Earlier versions of a skill, newest first. */
+  history(name: string): SkillRevision[] {
+    const dir = join(this.historyRoot, slugify(name, 64));
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => {
+        let meta: { version?: string; savedAt?: number; reason?: string } = {};
+        try {
+          meta = JSON.parse(readFileSync(join(dir, e.name, '.revision.json'), 'utf8'));
+        } catch {
+          /* legacy */
+        }
+        return { version: meta.version ?? '?', savedAt: meta.savedAt ?? statSync(join(dir, e.name)).mtimeMs, reason: meta.reason ?? '', dir: join(dir, e.name) };
+      })
+      .sort((a, b) => b.savedAt - a.savedAt);
+  }
+
+  /** Copy the current state of an editable skill into its history before it changes. */
+  private snapshot(info: SkillInfo, reason: string): void {
+    const savedAt = Date.now();
+    const dest = join(this.historyRoot, info.name, `${info.version ?? '1.0.0'}-${savedAt}`);
+    mkdirSync(dest, { recursive: true });
+    cpSync(info.dir, dest, { recursive: true, filter: (p) => !p.split(sep).includes('.history') });
+    writeFileSync(join(dest, '.revision.json'), JSON.stringify({ version: info.version ?? '1.0.0', savedAt, reason }));
+    // keep the 20 newest revisions per skill
+    for (const old of this.history(info.name).slice(20)) rmSync(old.dir, { recursive: true, force: true });
+  }
+
+  private logEdit(entry: Record<string, unknown>): void {
+    try {
+      mkdirSync(this.historyRoot, { recursive: true });
+      appendFileSync(join(this.historyRoot, 'edits.jsonl'), `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
+    } catch {
+      /* history is best effort */
+    }
+  }
+
+  private edits(): { at: number; name: string; action: string; hash?: string; reverted?: boolean }[] {
+    const file = join(this.historyRoot, 'edits.jsonl');
+    if (!existsSync(file)) return [];
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  }
+
+  private wasRolledBack(name: string, body: string): boolean {
+    const h = hash(body.trim());
+    return this.edits().some((e) => e.name === name && e.action === 'rollback' && (e as { undid?: string[] }).undid?.includes(h));
+  }
+
+  /**
+   * Restore an earlier version (the latest saved one by default). The current state is saved
+   * first, so a rollback can itself be undone, and the reverted content is remembered so the
+   * same change is not proposed again.
+   */
+  rollback(name: string, version?: string): SkillInfo {
+    const info = this.get(name);
+    if (info && !info.editable) throw new Error(`"${name}" is a ${info.source} skill and has no editable history`);
+    const key = info?.name ?? slugify(name, 64);
+    const revisions = this.history(key);
+    const target = version ? revisions.find((r) => r.version === version) : revisions[0];
+    if (!target) throw new Error(revisions.length ? `no saved version ${version} of "${name}"; versions: ${revisions.map((r) => r.version).join(', ')}` : `"${name}" has no earlier versions`);
+    const undid: string[] = [];
+    let dest: string;
+    if (info) {
+      undid.push(hash(parseFrontmatter(readFileSync(info.path, 'utf8')).body.trim()));
+      this.snapshot(info, `before rollback to ${target.version}`);
+      rmSync(info.dir, { recursive: true, force: true });
+      dest = info.dir;
+    } else {
+      // restoring a deleted skill
+      const { data } = parseFrontmatter<Record<string, unknown>>(readFileSync(join(target.dir, 'SKILL.md'), 'utf8'));
+      dest = join(this.dirs.user, data.category ? slugify(String(data.category), 32) : '', key);
+    }
+    cpSync(target.dir, dest, { recursive: true, filter: (p) => !p.endsWith('.revision.json') });
+    this.logEdit({ name: key, action: 'rollback', to: target.version, undid });
+    this.reload();
+    const restored = this.get(key);
+    if (!restored) throw new Error(`restored ${key} but it could not be loaded`);
+    return restored;
+  }
+
+  /** The SKILL.md body a patch would produce, without writing it (for admission checks). */
+  previewPatch(name: string, oldText: string, newText: string): string {
+    const info = this.get(name);
+    if (!info) throw new Error(`Skill "${name}" not found`);
+    const src = readFileSync(info.path, 'utf8');
+    const count = src.split(oldText).length - 1;
+    if (count !== 1) throw new Error(count ? `old_text occurs ${count} times; include more context` : 'old_text not found in SKILL.md');
+    return parseFrontmatter(src.replace(oldText, newText)).body;
   }
 
   private roots(): { dir: string; source: SkillSource }[] {
@@ -211,6 +384,7 @@ export class SkillRegistry {
       ),
     );
     for (const [rel, content] of Object.entries(input.files ?? {})) this.writeResource(dir, rel, content);
+    this.logEdit({ name, action: 'create', hash: hash(input.body.trim()) });
     this.reload();
     return this.get(name) as SkillInfo;
   }
@@ -236,7 +410,9 @@ export class SkillRegistry {
 
   update(name: string, patch: { description?: string; body?: string; files?: Record<string, string>; bumpVersion?: boolean }): SkillInfo {
     const info = this.editableCopy(name);
+    this.snapshot(info, 'update');
     const { data, body } = parseFrontmatter<Record<string, unknown>>(readFileSync(info.path, 'utf8'));
+    this.logEdit({ name: info.name, action: 'update', hash: hash((patch.body ?? body).trim()) });
     if (patch.description) data.description = patch.description;
     if (patch.bumpVersion !== false) data.version = bump(String(data.version ?? '1.0.0'));
     writeFileSync(info.path, stringifyFrontmatter(data, patch.body ?? body));
@@ -253,6 +429,8 @@ export class SkillRegistry {
     if (count === 0) throw new Error('old_text not found in SKILL.md');
     if (count > 1) throw new Error(`old_text occurs ${count} times; include more context`);
     const { data, body } = parseFrontmatter<Record<string, unknown>>(src.replace(oldText, newText));
+    this.snapshot(info, 'patch');
+    this.logEdit({ name: info.name, action: 'patch', hash: hash(body.trim()) });
     data.version = bump(String(data.version ?? '1.0.0'));
     writeFileSync(info.path, stringifyFrontmatter(data, body));
     this.reload();
@@ -263,6 +441,8 @@ export class SkillRegistry {
     const info = this.get(name);
     if (!info) throw new Error(`Skill "${name}" not found`);
     if (!info.editable) throw new Error(`"${name}" is a ${info.source} skill; disable it instead of deleting`);
+    this.snapshot(info, 'delete');
+    this.logEdit({ name: info.name, action: 'delete' });
     rmSync(info.dir, { recursive: true, force: true });
     this.reload();
   }
