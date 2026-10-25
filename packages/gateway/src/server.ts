@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { Kronos, KRONOS_VERSION, newId, logger, errorMessage, type PermissionMode, type PermissionDecision } from '@kronos/core';
 import * as core from '@kronos/core';
@@ -39,6 +39,13 @@ function findUiDir(explicit?: string): string | undefined {
     /* bundled */
   }
   return candidates.find((c) => existsSync(resolve(c, 'index.html')));
+}
+
+/** Constant-time string comparison for secrets. */
+function safeEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
 }
 
 const isLoopback = (host: string) => host === '127.0.0.1' || host === 'localhost' || host === '::1';
@@ -199,13 +206,21 @@ export class Gateway {
   private async hooks(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const cfg = this.rt.config.platforms;
     if (url.pathname === '/hooks/whatsapp') {
+      if (!cfg.whatsapp.enabled) return sendJson(res, 404, { error: 'whatsapp platform disabled' });
       if (req.method === 'GET') {
-        const ok = url.searchParams.get('hub.mode') === 'subscribe' && url.searchParams.get('hub.verify_token') === cfg.whatsapp.verifyToken;
+        const ok = url.searchParams.get('hub.mode') === 'subscribe' && Boolean(cfg.whatsapp.verifyToken) && safeEqual(url.searchParams.get('hub.verify_token') ?? '', cfg.whatsapp.verifyToken ?? '');
         res.writeHead(ok ? 200 : 403);
         res.end(ok ? (url.searchParams.get('hub.challenge') ?? '') : 'forbidden');
         return;
       }
-      const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+      const raw = await readBody(req);
+      // Meta signs every delivery with the app secret; without it anyone could forge senders
+      if (cfg.whatsapp.appSecret) {
+        const sig = String(req.headers['x-hub-signature-256'] ?? '');
+        const want = `sha256=${createHmac('sha256', cfg.whatsapp.appSecret).update(raw).digest('hex')}`;
+        if (!safeEqual(sig, want)) return sendJson(res, 401, { error: 'bad signature' });
+      }
+      const body = JSON.parse(raw.toString('utf8') || '{}');
       (this.platforms.get('whatsapp') as WhatsAppAdapter | undefined)?.receive(body);
       sendJson(res, 200, { ok: true });
       return;
@@ -213,7 +228,7 @@ export class Gateway {
     if (url.pathname === '/hooks/webhook') {
       if (!cfg.webhook.enabled) return sendJson(res, 404, { error: 'webhook platform disabled' });
       const secret = (req.headers['x-kronos-secret'] as string | undefined) ?? url.searchParams.get('secret') ?? '';
-      if (!cfg.webhook.secret || secret !== cfg.webhook.secret) return sendJson(res, 401, { error: 'bad secret' });
+      if (!cfg.webhook.secret || !safeEqual(secret, cfg.webhook.secret)) return sendJson(res, 401, { error: 'bad secret' });
       const body = JSON.parse((await readBody(req)).toString('utf8') || '{}') as { text?: string; chat?: string; user?: string; model?: string };
       if (!body.text) return sendJson(res, 400, { error: 'text is required' });
       sendJson(res, 200, await this.platforms.webhook(body));

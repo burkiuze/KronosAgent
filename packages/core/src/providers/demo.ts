@@ -21,6 +21,8 @@ export class DemoProvider implements Provider {
 
     if (/write concise titles/i.test(req.system)) {
       text = titleFor(lastUserText(req.messages));
+    } else if (/extract durable facts/i.test(req.system)) {
+      text = JSON.stringify(demoFacts(lastUserText(req.messages)));
     } else if (/summariz/i.test(req.system) && !req.tools.length) {
       text = summaryFor(req.messages);
     } else if (last && (last.role === 'tool' || last.parts.some((p) => p.type === 'tool_result'))) {
@@ -181,7 +183,19 @@ function route(input: string, tools: Set<string>): Plan {
   if (/\b(date|time|saat|tarih)\b/.test(lower) && has('shell')) {
     return { thinking: 'Checking the system clock.', text: 'Checking the clock.', calls: [call('shell', { command: 'date' })] };
   }
-  if (/^(hi|hello|hey|merhaba|selam)\b/.test(lower)) {
+  if (/^(merhaba|selam|günaydın|iyi akşamlar)/.test(lower)) {
+    return {
+      thinking: 'Türkçe bir selamlama — kendimi ve neler yapabildiğimi tanıtayım.',
+      text:
+        'Merhaba! Ben **Kronos**, otonom ajanınım. Dosyalarla çalışabilir, komut çalıştırabilir, web\'de arama yapıp sayfa okuyabilir, ' +
+        'oturumlar arasında hatırlayabilir, otomasyon zamanlayabilir, işleri paralel alt ajanlara dağıtabilir ve Telegram, Discord, ' +
+        'Slack gibi uygulamalardan seninle konuşabilirim.\n\nDene: `dosyaları listele`, `çalıştır git status`, `bir plan yap`, ' +
+        '`her gün 9\'da bana hava durumunu gönder`.' +
+        '\n\n> _Kronos şu an **çevrimdışı demo modunda**. Gerçek bir model için **Ayarlar → API Anahtarları** bölümünden anahtar ekle (ya da `kronos setup` çalıştır)._',
+      calls: [],
+    };
+  }
+  if (/^(hi|hello|hey)\b/.test(lower)) {
     return {
       thinking: 'A greeting — introduce myself and what I can do.',
       text:
@@ -238,6 +252,18 @@ function afterTools(toolMsg: Message, history: Message[]): string {
   }
   const asked = lastUserText(history);
   return `${lines.join('\n\n')}${asked ? '' : ''}${DEMO_NOTE}`;
+}
+
+/** Naive fact extraction so memory.autoExtract can be exercised offline. */
+function demoFacts(prompt: string): { user: string[]; memory: string[] } {
+  const said = /User said:\n([\s\S]*?)\n\nAssistant replied:/.exec(prompt)?.[1] ?? '';
+  const known = prompt.split('User said:')[0] ?? '';
+  const user: string[] = [];
+  const name = /\b(?:my name is|i am|i'm|benim adım|adım)\s+([A-ZÇĞİÖŞÜ][\wçğıöşü]+)/i.exec(said);
+  if (name && !known.includes(`name is ${name[1]}`)) user.push(`The user's name is ${name[1]}.`);
+  const pref = /\bi (?:prefer|like|love|use)\s+([^.!?\n]{2,60})/i.exec(said);
+  if (pref) user.push(`The user prefers ${pref[1]!.trim()}.`);
+  return { user, memory: [] };
 }
 
 function titleFor(text: string): string {

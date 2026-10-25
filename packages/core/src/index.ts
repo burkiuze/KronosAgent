@@ -33,6 +33,7 @@ export { createBackend, ProcessManager, type ExecBackend } from './backends/term
 export { PermissionPolicy, ruleMatches } from './safety/permissions.js';
 export { detectDangerous, isReadOnlyCommand } from './safety/dangerous.js';
 export { sendPlatformMessage, platformConfigured, chunkText, markdownToTelegramHtml, PLATFORM_LABELS, type PlatformId } from './messaging/senders.js';
+export { sendMail, type MailMessage } from './messaging/smtp.js';
 export { generateImage, textToSpeech, transcribe, imageProviderStatus } from './media/media.js';
 export { kronosPortrait, encodePng } from './media/png.js';
 

@@ -535,7 +535,7 @@ export const sendMessageTool: ToolDefinition<{ to: string; text: string }> = {
   name: 'send_message',
   toolset: 'messaging',
   risk: 'external',
-  description: `Send a message to a chat platform. to = "<platform>:<target>" where platform is one of ${Object.keys(PLATFORM_LABELS).join(', ')} (e.g. "telegram:123456", "discord:<channel id>", "slack:C0123", "webhook:https://…"). Use "home" as the target for the platform's configured home chat.`,
+  description: `Send a message to a chat platform. to = "<platform>:<target>" where platform is one of ${Object.keys(PLATFORM_LABELS).join(', ')} (e.g. "telegram:123456", "discord:<channel id>", "slack:C0123", "email:you@example.com", "webhook:https://…"). Use "home" as the target for the platform's configured home chat.`,
   parameters: {
     type: 'object',
     properties: { to: { type: 'string' }, text: { type: 'string', description: 'Markdown text.' } },

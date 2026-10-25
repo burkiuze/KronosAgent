@@ -51,8 +51,6 @@ export interface PlatformConfigBase {
   enabled?: boolean;
   /** user ids allowed to talk to the agent; empty = pairing required */
   allowedUsers?: string[];
-  /** profile to run this platform with */
-  profile?: string;
   /** default chat for deliveries (cron, notifications) */
   homeChat?: string;
   /** permission mode for agent runs started from this platform */
@@ -147,7 +145,7 @@ export interface KronosConfig {
     discord: PlatformConfigBase & { token?: string; channels?: string[]; mentionOnly?: boolean };
     slack: PlatformConfigBase & { botToken?: string; appToken?: string };
     matrix: PlatformConfigBase & { homeserver?: string; accessToken?: string; userId?: string };
-    whatsapp: PlatformConfigBase & { accessToken?: string; phoneNumberId?: string; verifyToken?: string };
+    whatsapp: PlatformConfigBase & { accessToken?: string; phoneNumberId?: string; verifyToken?: string; appSecret?: string };
     signal: PlatformConfigBase & { apiUrl?: string; number?: string };
     email: PlatformConfigBase & { smtpUrl?: string; from?: string; to?: string };
     webhook: PlatformConfigBase & { secret?: string };
@@ -261,7 +259,7 @@ export function defaultConfig(): KronosConfig {
       discord: { enabled: false, token: '${DISCORD_BOT_TOKEN}', allowedUsers: [], mentionOnly: true },
       slack: { enabled: false, botToken: '${SLACK_BOT_TOKEN}', appToken: '${SLACK_APP_TOKEN}', allowedUsers: [] },
       matrix: { enabled: false, homeserver: '', accessToken: '${MATRIX_ACCESS_TOKEN}', userId: '', allowedUsers: [] },
-      whatsapp: { enabled: false, accessToken: '${WHATSAPP_ACCESS_TOKEN}', phoneNumberId: '', verifyToken: '${WHATSAPP_VERIFY_TOKEN}', allowedUsers: [] },
+      whatsapp: { enabled: false, accessToken: '${WHATSAPP_ACCESS_TOKEN}', phoneNumberId: '', verifyToken: '${WHATSAPP_VERIFY_TOKEN}', appSecret: '${WHATSAPP_APP_SECRET}', allowedUsers: [] },
       signal: { enabled: false, apiUrl: 'http://127.0.0.1:8080', number: '', allowedUsers: [] },
       email: { enabled: false, smtpUrl: '${SMTP_URL}', from: '', to: '' },
       webhook: { enabled: false, secret: '${KRONOS_WEBHOOK_SECRET}' },

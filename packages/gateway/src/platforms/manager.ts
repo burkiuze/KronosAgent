@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Kronos, PermissionDecision, PermissionMode, PlatformId } from '@kronos/core';
@@ -6,6 +7,14 @@ import type { IncomingMessage, PlatformAdapter, PlatformContext, PlatformStatus 
 import { TelegramAdapter } from './telegram.js';
 import { DiscordAdapter } from './discord.js';
 import { SlackAdapter } from './slack.js';
+
+// unambiguous alphabet (no 0/O, 1/I/L) — codes are read off a phone and typed into the desktop
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function pairingCode(): string {
+  let code = '';
+  for (let i = 0; i < 6; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  return code;
+}
 import { MatrixAdapter, SignalAdapter, WhatsAppAdapter, WebhookAdapter } from './others.js';
 
 const log = logger('platforms');
@@ -213,7 +222,7 @@ export class PlatformManager {
     if (!this.authorized(m)) {
       let req = this.pairing.find((p) => p.platform === m.platform && p.userId === m.userId);
       if (!req) {
-        req = { code: Math.random().toString(36).slice(2, 8).toUpperCase(), platform: m.platform, userId: m.userId, userName: m.userName, chatId: m.chatId, createdAt: Date.now() };
+        req = { code: pairingCode(), platform: m.platform, userId: m.userId, userName: m.userName, chatId: m.chatId, createdAt: Date.now() };
         this.pairing.push(req);
       }
       await this.reply(adapter, m, `🔒 This Kronos agent is private.\nPairing code: *${req.code}*\nApprove it in Kronos Desktop → Messaging, or run \`kronos pairing approve ${req.code}\`.`);

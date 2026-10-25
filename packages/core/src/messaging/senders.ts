@@ -1,5 +1,6 @@
 import type { KronosConfig } from '../config/schema.js';
 import { newId } from '../util/misc.js';
+import { sendMail } from './smtp.js';
 
 export type PlatformId = 'telegram' | 'discord' | 'slack' | 'matrix' | 'whatsapp' | 'signal' | 'email' | 'webhook' | 'homeassistant';
 
@@ -176,8 +177,17 @@ export async function sendPlatformMessage(platform: PlatformId, target: string, 
       );
       return;
     }
-    case 'email':
-      throw new Error('Email delivery requires the gateway (SMTP); use a webhook or chat platform instead.');
+    case 'email': {
+      const smtpUrl = cfg.email.smtpUrl;
+      if (!smtpUrl) throw new Error('Email not configured (platforms.email.smtpUrl, e.g. smtps://user:pass@smtp.example.com:465)');
+      const to = (target || cfg.email.to || '').split(/[,;]\s*/).filter(Boolean);
+      if (!to.length) throw new Error('No email recipient (deliver to email:<address> or set platforms.email.to)');
+      const from = cfg.email.from || decodeURIComponent(new URL(smtpUrl).username) || 'kronos@localhost';
+      // first meaningful line becomes the subject
+      const firstLine = text.split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find(Boolean) ?? 'Kronos';
+      await sendMail(smtpUrl, { from, to, subject: firstLine.length > 90 ? `${firstLine.slice(0, 87)}…` : firstLine, text });
+      return;
+    }
     default:
       throw new Error(`unknown platform ${String(platform)}`);
   }

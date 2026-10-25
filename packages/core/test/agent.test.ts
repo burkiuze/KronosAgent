@@ -89,6 +89,23 @@ describe('agent loop (demo model)', () => {
     expect(env.rt.sessions.get(b.id)!.systemPrompt).toContain('TypeScript');
   });
 
+  it('extracts durable facts automatically when memory.autoExtract is on', async () => {
+    env.rt.updateConfig({ memory: { autoExtract: true } });
+    try {
+      const a = env.rt.agent(env.rt.createSession({ source: 'test' }).id);
+      const events: AgentEvent[] = [];
+      a.events.on(collect(events));
+      await a.run('Hi! My name is Ada and I use Neovim every day.');
+      await env.rt.settle();
+      const user = env.rt.memory.entries('user').join('\n');
+      expect(user).toContain('Ada');
+      expect(user).toContain('Neovim');
+      expect(events.some((e) => e.type === 'notice' && e.text.startsWith('Remembered:'))).toBe(true);
+    } finally {
+      env.rt.updateConfig({ memory: { autoExtract: false } });
+    }
+  });
+
   it('delegates to parallel subagents', async () => {
     const session = env.rt.createSession({ source: 'test' });
     const agent = env.rt.agent(session.id);

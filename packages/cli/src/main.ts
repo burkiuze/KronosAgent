@@ -71,11 +71,34 @@ function modeFrom(args: ParsedArgs): PermissionMode | undefined {
   return m && ['ask', 'auto-edit', 'yolo', 'plan'].includes(m) ? (m as PermissionMode) : undefined;
 }
 
-async function readStdin(): Promise<string> {
+/**
+ * Read piped input. When a prompt was already given on the command line, only wait briefly for
+ * the first chunk, so an idle pipe that never closes (CI runners, process managers) can't hang.
+ */
+async function readStdin(opts: { idleMs?: number } = {}): Promise<string> {
   if (process.stdin.isTTY) return '';
-  const chunks: Buffer[] = [];
-  for await (const ch of process.stdin) chunks.push(ch as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
+  return new Promise((resolveRead) => {
+    const chunks: Buffer[] = [];
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (gaveUp = false) => {
+      clearTimeout(timer);
+      process.stdin.off('data', onData);
+      process.stdin.off('end', onEnd);
+      process.stdin.off('error', onEnd);
+      if (gaveUp) process.stdin.destroy();
+      resolveRead(Buffer.concat(chunks).toString('utf8'));
+    };
+    const onEnd = () => finish();
+    const onData = (chunk: Buffer) => {
+      chunks.push(chunk);
+      clearTimeout(timer);
+      timer = undefined;
+    };
+    process.stdin.on('data', onData);
+    process.stdin.once('end', onEnd);
+    process.stdin.once('error', onEnd);
+    if (opts.idleMs) timer = setTimeout(() => finish(true), opts.idleMs);
+  });
 }
 
 function openBrowser(url: string): void {
@@ -174,7 +197,7 @@ async function withRt(args: ParsedArgs, fn: (rt: Kronos) => Promise<void> | void
 }
 
 async function cmdInteractive(args: ParsedArgs, prompt: string): Promise<void> {
-  const piped = await readStdin();
+  const piped = await readStdin({ idleMs: prompt ? 400 : undefined });
   const rt = await makeRuntime(args);
   let sessionId = flagStr(args, 'session');
   if (args.flags.continue) sessionId = rt.sessions.list({ limit: 1, source: 'cli' })[0]?.id;
@@ -188,7 +211,7 @@ async function cmdInteractive(args: ParsedArgs, prompt: string): Promise<void> {
 }
 
 async function cmdRun(args: ParsedArgs, pos: string[]): Promise<void> {
-  const piped = await readStdin();
+  const piped = await readStdin({ idleMs: pos.join('').trim() ? 400 : undefined });
   const prompt = [pos.join(' '), piped ? `\n\n<stdin>\n${piped}\n</stdin>` : ''].join('').trim();
   if (!prompt) {
     console.error('usage: kronos run "<prompt>"  (or pipe input)');

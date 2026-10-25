@@ -470,6 +470,11 @@ export class Kronos {
     return guarded;
   }
 
+  /** Wait for tracked background work (titles, memory extraction, hooks) to finish. */
+  async settle(): Promise<void> {
+    while (this.background.size) await Promise.allSettled([...this.background]);
+  }
+
   newRequestId(): string {
     return newId('req_');
   }

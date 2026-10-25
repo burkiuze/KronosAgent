@@ -585,6 +585,10 @@ export class Agent {
     if (this.depth === 0 && this.rt.config.agent.autoTitle && (this.session.title === 'New conversation' || !this.session.title)) {
       void this.rt.track(this.autoTitle());
     }
+    const mem = this.rt.config.memory;
+    if (this.depth === 0 && mem.enabled && mem.autoExtract && !error && stopReason === 'end_turn' && text.trim()) {
+      void this.rt.track(this.extractMemories(text));
+    }
     return { runId, text, stopReason, usage, durationMs, error, toolCalls };
   }
 
@@ -981,6 +985,70 @@ export class Agent {
     this.saveSession({ title });
     this.rt.artifacts.renameSession(this.session.id, title);
     this.emit({ type: 'title', runId: this.currentRunId, sessionId: this.session.id, title });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Automatic memory extraction (memory.autoExtract)
+  // ---------------------------------------------------------------------------
+
+  /** After a run, let a small model pick out durable facts the agent didn't save itself. */
+  private async extractMemories(reply: string): Promise<void> {
+    const lastUser = [...this.messages].reverse().find((m) => m.role === 'user' && m.meta?.kind !== 'summary' && messageText(m).trim());
+    const userText = lastUser ? messageText(lastUser).trim() : '';
+    if (userText.length < 12) return;
+    const memory = this.rt.memory;
+    const known = [...memory.entries('user').map((e) => `USER: ${e}`), ...memory.entries('memory').map((e) => `MEMORY: ${e}`)];
+    let raw = '';
+    try {
+      const ref = this.rt.config.model.summary || this.rt.providers.smallModelRef(this.session.model || this.rt.providers.resolve().ref);
+      const res = await this.rt.providers.chat(
+        {
+          model: this.rt.providers.resolve(ref),
+          system: [
+            'You extract durable facts worth remembering across future conversations.',
+            'Return only JSON: {"user": [...], "memory": [...]}.',
+            '"user": stable facts about the user (name, role, preferences, recurring goals, people, tools they use).',
+            '"memory": lasting facts about their environment, projects or conventions learned in this exchange.',
+            'Skip anything temporary, sensitive (passwords, keys, health, finances unless explicitly asked to remember), already known, or speculative.',
+            'Each fact is one short sentence. Usually there is nothing new: return {"user": [], "memory": []}.',
+          ].join('\n'),
+          messages: [
+            {
+              id: 'x',
+              role: 'user',
+              parts: [{ type: 'text', text: `Already known:\n${known.join('\n') || '(nothing)'}\n\nUser said:\n${truncate(userText, 3000)}\n\nAssistant replied:\n${truncate(reply, 2000)}` }],
+              createdAt: Date.now(),
+            },
+          ],
+          tools: [],
+          maxTokens: 400,
+          effort: 'low',
+          thinking: false,
+          showThinking: false,
+        },
+        () => undefined,
+        [],
+      );
+      raw = textOf(res.parts);
+    } catch (e) {
+      log.debug('memory extraction failed', e);
+      return;
+    }
+    let parsed: { user?: unknown; memory?: unknown } = {};
+    try {
+      parsed = JSON.parse(/\{[\s\S]*\}/.exec(raw)?.[0] ?? '{}') as typeof parsed;
+    } catch {
+      return;
+    }
+    const saved: string[] = [];
+    for (const target of ['user', 'memory'] as const) {
+      const facts = Array.isArray(parsed[target]) ? (parsed[target] as unknown[]).filter((f): f is string => typeof f === 'string') : [];
+      for (const fact of facts.slice(0, 3)) {
+        const clean = fact.trim().slice(0, 300);
+        if (clean && memory.add(target, clean, this.session.id).ok) saved.push(clean);
+      }
+    }
+    if (saved.length) this.notice('info', `Remembered: ${saved.join(' · ')}`);
   }
 
   rename(title: string): void {

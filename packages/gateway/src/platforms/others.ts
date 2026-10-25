@@ -125,7 +125,7 @@ export class WhatsAppAdapter extends PlatformAdapter {
     const c = this.rt.config.platforms.whatsapp;
     if (!c.accessToken || !c.phoneNumberId) throw new Error('WhatsApp access token and phone number id are required');
     this.botName = c.phoneNumberId;
-    this.detail = 'Webhook: <public url>/hooks/whatsapp';
+    this.detail = c.appSecret ? 'Webhook: <public url>/hooks/whatsapp (signed)' : 'Webhook: <public url>/hooks/whatsapp — set the app secret to verify signatures';
   }
 
   protected async disconnect(): Promise<void> {}

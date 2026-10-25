@@ -71,6 +71,7 @@ const PLATFORMS: Record<string, { help: string; fields: FieldDef[]; color: strin
       { key: 'accessToken', label: 'Access token', secretEnv: 'WHATSAPP_ACCESS_TOKEN' },
       { key: 'phoneNumberId', label: 'Phone number id' },
       { key: 'verifyToken', label: 'Webhook verify token', secretEnv: 'WHATSAPP_VERIFY_TOKEN' },
+      { key: 'appSecret', label: 'App secret (verifies webhook signatures)', secretEnv: 'WHATSAPP_APP_SECRET' },
       { key: 'allowedUsers', label: 'Allowed phone numbers', list: true },
     ],
   },
@@ -87,6 +88,15 @@ const PLATFORMS: Record<string, { help: string; fields: FieldDef[]; color: strin
     color: '#888888',
     help: 'POST {"text": "…", "chat": "optional"} to <gateway>/hooks/webhook with header X-Kronos-Secret. Great for iOS Shortcuts, n8n, Zapier.',
     fields: [{ key: 'secret', label: 'Shared secret', secretEnv: 'KRONOS_WEBHOOK_SECRET' }],
+  },
+  email: {
+    color: '#ea4335',
+    help: 'Deliver automation results and notifications by email over SMTP (smtps://user:app-password@smtp.gmail.com:465 or smtp://…:587 with STARTTLS).',
+    fields: [
+      { key: 'smtpUrl', label: 'SMTP URL', secretEnv: 'SMTP_URL', placeholder: 'smtps://user:pass@smtp.example.com:465' },
+      { key: 'from', label: 'From', placeholder: 'Kronos <kronos@example.com>' },
+      { key: 'to', label: 'Default recipient', placeholder: 'you@example.com' },
+    ],
   },
   homeassistant: {
     color: '#18bcf2',

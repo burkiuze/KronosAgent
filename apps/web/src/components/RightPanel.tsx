@@ -113,7 +113,8 @@ function FilesPanel({ root }: { root: string }) {
           <ArrowUp size={15} />
         </button>
         <span className="files-path" title={dir}>
-          {dir.replace(/^\/home\/[^/]+|^\/Users\/[^/]+/, '~')}
+          {/* rtl keeps the tail visible when truncating; bdi keeps the path itself left-to-right */}
+          <bdi>{dir.replace(/^\/home\/[^/]+|^\/Users\/[^/]+/, '~')}</bdi>
         </span>
         <button className={`icon-btn ${hidden ? 'active' : ''}`} title="Show hidden files" onClick={() => setHidden((h) => !h)}>
           <Eye size={15} />

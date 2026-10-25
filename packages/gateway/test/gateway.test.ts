@@ -154,3 +154,29 @@ describe('terminal', () => {
     expect(['pty', 'script', 'pipe']).toContain(mode);
   });
 });
+
+describe('webhooks', () => {
+  it('verifies the shared secret and WhatsApp signatures', async () => {
+    const { createHmac } = await import('node:crypto');
+    // disabled platforms don't expose their hooks
+    expect((await fetch(`${gw.url}/hooks/webhook`, { method: 'POST', body: '{}' })).status).toBe(404);
+    await api('/api/config', { method: 'PATCH', body: JSON.stringify({ platforms: { webhook: { enabled: true, secret: 's3cret' }, whatsapp: { enabled: true, verifyToken: 'vt', appSecret: 'app-secret' } } }) });
+
+    const bad = await fetch(`${gw.url}/hooks/webhook`, { method: 'POST', headers: { 'x-kronos-secret': 'nope' }, body: JSON.stringify({ text: 'hi' }) });
+    expect(bad.status).toBe(401);
+    const ok = await fetch(`${gw.url}/hooks/webhook`, { method: 'POST', headers: { 'x-kronos-secret': 's3cret' }, body: JSON.stringify({ text: 'Hello Kronos!' }) });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { text: string }).text).toMatch(/Kronos/);
+
+    const verify = await fetch(`${gw.url}/hooks/whatsapp?hub.mode=subscribe&hub.verify_token=vt&hub.challenge=42`);
+    expect(await verify.text()).toBe('42');
+    expect((await fetch(`${gw.url}/hooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=42`)).status).toBe(403);
+
+    const payload = JSON.stringify({ entry: [] });
+    const forged = await fetch(`${gw.url}/hooks/whatsapp`, { method: 'POST', headers: { 'x-hub-signature-256': 'sha256=deadbeef' }, body: payload });
+    expect(forged.status).toBe(401);
+    const sig = `sha256=${createHmac('sha256', 'app-secret').update(payload).digest('hex')}`;
+    const signed = await fetch(`${gw.url}/hooks/whatsapp`, { method: 'POST', headers: { 'x-hub-signature-256': sig }, body: payload });
+    expect(signed.status).toBe(200);
+  });
+});

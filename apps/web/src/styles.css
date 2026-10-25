@@ -3357,3 +3357,14 @@ button.sb-item:hover,
     padding-right: 14px;
   }
 }
+
+/* the floating plan sits beside the chat column only when there is room for it */
+.app.with-right .todo-float {
+  display: none;
+}
+
+@media (max-width: 1320px) {
+  .todo-float {
+    display: none;
+  }
+}
