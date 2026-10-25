@@ -37,10 +37,13 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - name: CLI smoke test (offline demo model)
+      - name: CLI smoke test (no provider, then the demo model chosen explicitly)
         run: |
           node packages/cli/dist/bin.js version
-          node packages/cli/dist/bin.js run "list the files here" --mode yolo
+          # no provider connected: refuses with a "connect a provider" message instead of a demo answer
+          if node packages/cli/dist/bin.js run "hello" > out.txt 2>&1; then cat out.txt; exit 1; fi
+          grep -q "No model provider is connected" out.txt
+          node packages/cli/dist/bin.js run "list the files here" --mode yolo --model demo
           node packages/cli/dist/bin.js doctor || true
 
   e2e:
