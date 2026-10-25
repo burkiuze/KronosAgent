@@ -31,7 +31,6 @@ import { relTime } from '../lib/format';
 import { t } from '../lib/i18n';
 import type { Session } from '../lib/types';
 import { Menu, MenuItem } from './ui';
-import { KronosMark } from './Logo';
 import { ProfilesMenu } from './Profiles';
 
 const NAV: { id: View; icon: typeof Puzzle; key: string }[] = [
@@ -168,7 +167,6 @@ export function Sidebar() {
   const running = useStore((s) => s.running);
   const permissions = useStore((s) => s.permissions);
   const clarify = useStore((s) => s.clarify);
-  const busy = running.length > 0 && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   const groupByProject = useStore((s) => s.groupByProject);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -204,7 +202,6 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-top">
         <div className="brand">
-          <KronosMark size={22} busy={busy} />
           <span>KRONOS</span>
         </div>
         <div className="flex-1" />
