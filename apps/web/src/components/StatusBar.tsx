@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Command, Cpu, Loader, Bot, Clock, Radio, Coins } from 'lucide-react';
 import { chatOf, setState, useStore } from '../lib/store';
-import { clock, cost, tokens } from '../lib/format';
+import { clock, cost, shortDuration, tokens } from '../lib/format';
 import { t } from '../lib/i18n';
 import { ModelPicker } from './ModelPicker';
 
@@ -10,14 +10,20 @@ export function StatusBar() {
   const running = useStore((s) => s.running);
   const status = useStore((s) => s.status);
   const currentId = useStore((s) => s.currentId);
-  const chat = useStore((s) => chatOf(s.currentId));
+  const chat = useStore((s) => {
+    const c = chatOf(s.currentId);
+    return { running: c.running, usage: c.usage, runStartedAt: c.runStartedAt, context: c.context };
+  });
   const sessions = useStore((s) => s.sessions);
   const session = sessions.find((x) => x.id === currentId);
   const [now, setNow] = useState(Date.now());
+  // tick every second only while a run is live; the session age just needs a minute
+  const live = chat.running;
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), live ? 1000 : 60_000);
     return () => clearInterval(id);
-  }, []);
+  }, [live]);
   const usage = chat.usage ?? session?.usage;
   const totalTokens = usage ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens : 0;
   const sessionStart = session?.createdAt;
@@ -62,7 +68,7 @@ export function StatusBar() {
       )}
       {sessionStart && (
         <span className="sb-item">
-          {t('status.session')} <span className="sb-dim">{clock(now - sessionStart)}</span>
+          {t('status.session')} <span className="sb-dim">{shortDuration(now - sessionStart)}</span>
         </span>
       )}
       <ModelPicker compact>

@@ -3,6 +3,11 @@ import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
 import { t } from './i18n';
 
+const escapeHtml = (text: string) => text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string);
+
+/** True while rendering text that is still streaming in. */
+let live = false;
+
 const marked = new Marked({
   gfm: true,
   breaks: false,
@@ -11,9 +16,10 @@ const marked = new Marked({
       const language = (lang ?? '').split(/\s/)[0] ?? '';
       let html: string;
       try {
-        html = language && hljs.getLanguage(language) ? hljs.highlight(text, { language }).value : hljs.highlightAuto(text).value;
+        // auto-detection tries every grammar, so a block that is still streaming stays plain until it settles
+        html = language && hljs.getLanguage(language) ? hljs.highlight(text, { language }).value : live ? escapeHtml(text) : hljs.highlightAuto(text).value;
       } catch {
-        html = text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string);
+        html = escapeHtml(text);
       }
       const label = language || 'text';
       return `<div class="code-block"><div class="code-head"><span>${label}</span><button class="code-copy" data-copy>${t('common.copy')}</button></div><pre><code class="hljs language-${label}">${html}</code></pre></div>`;
@@ -25,16 +31,38 @@ const marked = new Marked({
   },
 });
 
+// Rendered HTML keyed by source, least-recently-used first, capped by total size so long
+// sessions do not accumulate megabytes of stale renders.
 const cache = new Map<string, string>();
+const CACHE_BUDGET = 2_000_000; // characters of source + html
+let cacheSize = 0;
 
-export function renderMarkdown(src: string): string {
+/**
+ * Markdown → sanitized HTML. `opts.live` marks text that is still streaming: it is neither cached
+ * (every frame is a new prefix) nor run through code-language auto-detection.
+ */
+export function renderMarkdown(src: string, opts: { live?: boolean } = {}): string {
   const hit = cache.get(src);
-  if (hit) return hit;
-  const raw = marked.parse(src, { async: false }) as string;
-  const clean = DOMPurify.sanitize(raw, { ADD_ATTR: ['target', 'data-copy'] });
-  if (src.length < 20000) {
-    if (cache.size > 500) cache.clear();
+  if (hit !== undefined) {
+    cache.delete(src);
+    cache.set(src, hit);
+    return hit;
+  }
+  live = Boolean(opts.live);
+  let clean: string;
+  try {
+    clean = DOMPurify.sanitize(marked.parse(src, { async: false }) as string, { ADD_ATTR: ['target', 'data-copy'] });
+  } finally {
+    live = false;
+  }
+  if (!opts.live && src.length < 100_000) {
     cache.set(src, clean);
+    cacheSize += src.length + clean.length;
+    for (const [k, v] of cache) {
+      if (cacheSize <= CACHE_BUDGET) break;
+      cache.delete(k);
+      cacheSize -= k.length + v.length;
+    }
   }
   return clean;
 }

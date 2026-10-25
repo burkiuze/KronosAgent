@@ -127,6 +127,15 @@ export class Agent {
     if (Array.isArray(saved)) this.todos = saved as Todo[];
     const rules = this.session.meta?.allowRules;
     if (Array.isArray(rules)) for (const r of rules) this.policy.allowForSession(String(r));
+    // the last Codemaster on/off note in the history says whether the directive is in effect,
+    // so an agent rebuilt after a restart (or after being evicted while idle) does not repeat it
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const cm = this.messages[i]?.meta?.codemaster;
+      if (typeof cm === 'boolean') {
+        this.codemasterActive = cm;
+        break;
+      }
+    }
   }
 
   get id(): string {
@@ -433,7 +442,7 @@ export class Agent {
               role: 'system',
               parts: [{ type: 'text', text: codemaster ? codemasterDirective(this.toolSpecs.map((t) => t.name)) : 'Codemaster mode is now off: return to your normal workflow.' }],
               createdAt: Date.now(),
-              meta: { kind: 'note' },
+              meta: { kind: 'note', codemaster },
             },
           ]);
         }

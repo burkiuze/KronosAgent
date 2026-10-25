@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import type {
   BetaContentBlock,
   BetaContentBlockParam,
@@ -23,6 +23,12 @@ export interface AnthropicProviderOptions {
   id?: string;
 }
 
+// The SDK is loaded on first use: it costs ~160 ms and several MB of heap at startup, which
+// sessions that never talk to Claude should not pay.
+type SDK = typeof Anthropic;
+let sdkPromise: Promise<SDK> | undefined;
+const loadSdk = (): Promise<SDK> => (sdkPromise ??= import('@anthropic-ai/sdk').then((m) => m.default));
+
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 const BINDING_BETA = 'thinking-binding-controls-2026-08-01';
 
@@ -46,11 +52,12 @@ export class AnthropicProvider implements Provider {
     return !this.opts.baseUrl || /api\.anthropic\.com/.test(this.opts.baseUrl);
   }
 
-  private getClient(): Anthropic {
+  private async getClient(): Promise<Anthropic> {
     if (this.client) return this.client;
     const apiKey = this.opts.apiKey || process.env.ANTHROPIC_API_KEY || undefined;
     const authToken = this.opts.authToken || process.env.ANTHROPIC_AUTH_TOKEN || undefined;
     if (!apiKey && !authToken) throw new MissingCredentialsError(this.id, ['ANTHROPIC_API_KEY']);
+    const Anthropic = await loadSdk();
     this.client = new Anthropic({
       apiKey: apiKey ?? null,
       authToken: authToken ?? null,
@@ -63,6 +70,7 @@ export class AnthropicProvider implements Provider {
   }
 
   async chat(req: ChatRequest, onEvent: (e: StreamEvent) => void): Promise<ChatResponse> {
+    const Anthropic = await loadSdk();
     let attempt = 0;
     for (;;) {
       try {
@@ -169,7 +177,7 @@ export class AnthropicProvider implements Provider {
   }
 
   private async once(req: ChatRequest, onEvent: (e: StreamEvent) => void): Promise<ChatResponse> {
-    const client = this.getClient();
+    const client = await this.getClient();
     const params = this.buildParams(req);
     const stream = client.beta.messages.stream(params, { signal: req.signal });
     const toolNames = new Map<number, string>();
@@ -219,7 +227,7 @@ export class AnthropicProvider implements Provider {
   }
 
   async listModels() {
-    const client = this.getClient();
+    const client = await this.getClient();
     const out = [];
     for await (const m of client.models.list({ limit: 100 })) {
       const info = m as unknown as { id: string; display_name?: string; max_input_tokens?: number; max_tokens?: number };

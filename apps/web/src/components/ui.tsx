@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
 export function Toggle({ checked, onChange, disabled, title }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string }) {
@@ -44,10 +44,32 @@ export function Modal({ open, onClose, children, wide, className = '' }: { open:
   );
 }
 
+/**
+ * Caps a popover's height to the room left inside whatever clips it (a scrolling ancestor or the
+ * window), so a long menu scrolls instead of running off the screen.
+ */
+export function fitPopover(el: HTMLElement, gap = 8): void {
+  el.style.maxHeight = '';
+  const r = el.getBoundingClientRect();
+  let top = 0;
+  let bottom = window.innerHeight;
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if (o === 'auto' || o === 'scroll' || o === 'hidden') {
+      const b = p.getBoundingClientRect();
+      top = Math.max(top, b.top);
+      bottom = Math.min(bottom, b.bottom);
+    }
+  }
+  const room = r.top < top + gap ? r.bottom - top - gap : bottom - r.top - gap;
+  if (r.height > room) el.style.maxHeight = `${Math.max(140, Math.floor(room))}px`;
+}
+
 /** Small anchored popover menu. */
 export function Menu({ trigger, children, align = 'left', up }: { trigger: (open: () => void) => ReactNode; children: (close: () => void) => ReactNode; align?: 'left' | 'right'; up?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -61,10 +83,22 @@ export function Menu({ trigger, children, align = 'left', up }: { trigger: (open
       window.removeEventListener('keydown', onKey);
     };
   }, [open]);
+  useLayoutEffect(() => {
+    if (!open || !pop.current) return;
+    const el = pop.current;
+    const fit = () => fitPopover(el);
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [open]);
   return (
     <div className="menu-wrap" ref={ref}>
       {trigger(() => setOpen((o) => !o))}
-      {open && <div className={`menu ${align} ${up ? 'up' : ''}`}>{children(() => setOpen(false))}</div>}
+      {open && (
+        <div ref={pop} className={`menu ${align} ${up ? 'up' : ''}`}>
+          {children(() => setOpen(false))}
+        </div>
+      )}
     </div>
   );
 }

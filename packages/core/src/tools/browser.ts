@@ -9,7 +9,7 @@ type PW = { chromium: { launch(opts: Record<string, unknown>): Promise<any> } };
 
 let cachedPw: PW | null | undefined;
 
-export function loadOptional<T = unknown>(name: string): T | null {
+function requireBases(): string[] {
   const bases: string[] = [];
   try {
     bases.push(import.meta.url);
@@ -17,7 +17,11 @@ export function loadOptional<T = unknown>(name: string): T | null {
     /* cjs bundle */
   }
   bases.push(join(process.cwd(), 'index.js'));
-  for (const base of bases) {
+  return bases;
+}
+
+export function loadOptional<T = unknown>(name: string): T | null {
+  for (const base of requireBases()) {
     try {
       return createRequire(base)(name) as T;
     } catch {
@@ -27,10 +31,27 @@ export function loadOptional<T = unknown>(name: string): T | null {
   return null;
 }
 
+/** Whether a package can be loaded, without loading it. */
+export function hasOptional(name: string): boolean {
+  return requireBases().some((base) => {
+    try {
+      createRequire(base).resolve(name);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function playwright(): PW | null {
   if (cachedPw === undefined) cachedPw = loadOptional<PW>('playwright') ?? loadOptional<PW>('playwright-core');
   return cachedPw;
 }
+
+// Playwright is ~6 MB of JS (tens of MB of heap once parsed): the tool list only needs to know
+// it is installed, and the module itself loads on the first real browser action.
+let pwInstalled: boolean | undefined;
+const playwrightInstalled = () => (pwInstalled ??= hasOptional('playwright') || hasOptional('playwright-core'));
 
 export class BrowserManager {
   private browser: any;
@@ -128,7 +149,7 @@ export const browserTool: ToolDefinition<{
     },
     required: ['action'],
   },
-  available: () => (playwright() ? null : 'Playwright is not installed'),
+  available: () => (playwrightInstalled() ? null : 'Playwright is not installed'),
   summarize: (i) => `Browser ${i.action}${i.url ? ` ${truncate(i.url, 60)}` : i.ref !== undefined ? ` #${i.ref}` : i.selector ? ` ${i.selector}` : ''}`,
   async execute(input, ctx) {
     const mgr = ctx.runtime.browser;

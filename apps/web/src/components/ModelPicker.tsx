@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, KeyRound, Star } from 'lucide-react';
 import { get } from '../lib/api';
 import { getState, setSessionModel, setState, toast, useStore } from '../lib/store';
@@ -6,6 +6,7 @@ import { updateConfig } from '../lib/config';
 import type { ModelInfo } from '../lib/types';
 import { tokens } from '../lib/format';
 import { ProviderLogo } from './ProviderConnect';
+import { fitPopover } from './ui';
 
 interface ProviderStatus {
   id: string;
@@ -14,7 +15,8 @@ interface ProviderStatus {
   local: boolean;
 }
 
-export function ModelPicker({ children, compact }: { children: ReactNode; compact?: boolean }) {
+/** `compact` right-aligns the popup; `down` opens it below the trigger (the centered welcome composer). */
+export function ModelPicker({ children, compact, down }: { children: ReactNode; compact?: boolean; down?: boolean }) {
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
@@ -54,6 +56,11 @@ export function ModelPicker({ children, compact }: { children: ReactNode; compac
   };
 
   const unconfigured = providers.filter((p) => !p.configured && !p.local);
+  const pop = useRef<HTMLDivElement>(null);
+  // re-fit once the model list has loaded, since that is what makes the popup tall
+  useLayoutEffect(() => {
+    if (open && pop.current) fitPopover(pop.current);
+  }, [open, models.length, providers.length]);
 
   return (
     <div className="menu-wrap">
@@ -63,7 +70,7 @@ export function ModelPicker({ children, compact }: { children: ReactNode; compac
       {open && (
         <>
           <div className="click-catcher" onClick={() => setOpen(false)} />
-          <div className={`model-picker ${compact ? 'up' : ''}`}>
+          <div ref={pop} className={`model-picker ${compact ? 'up' : ''} ${down ? 'down' : ''}`}>
             <input className="model-search" autoFocus placeholder="Search models or type provider:model…" value={q} onChange={(e) => setQ(e.target.value)} />
             <div className="model-list">
               {groups.map(([provider, list]) => (

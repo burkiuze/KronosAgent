@@ -124,6 +124,36 @@ describe('agent loop (demo model)', () => {
     }
   });
 
+  it('remembers Codemaster across a rebuilt agent instead of repeating the directive', async () => {
+    env.rt.updateConfig({ model: { effort: 'codemaster' } });
+    try {
+      const id = env.rt.createSession({ source: 'test' }).id;
+      await env.rt.agent(id).run('hello');
+      env.rt.releaseAgent(id); // what a restart or idle eviction does
+      await env.rt.agent(id).run('hello again');
+      const on = env.rt.sessions.messages(id).filter((m) => m.meta?.kind === 'note' && messageText(m).includes('CODEMASTER MODE'));
+      expect(on).toHaveLength(1);
+    } finally {
+      env.rt.updateConfig({ model: { effort: 'medium' } });
+    }
+  });
+
+  it('keeps only a bounded number of idle agents in memory', async () => {
+    const ids = Array.from({ length: 14 }, () => env.rt.createSession({ source: 'test' }).id);
+    const first = env.rt.agent(ids[0]!);
+    const busy = first.run('list the files here'); // stays live while running
+    for (const id of ids.slice(1)) env.rt.agent(id);
+    const live = env.rt.liveAgents();
+    expect(live.filter((a) => !a.isRunning).length).toBeLessThanOrEqual(8);
+    expect(live).toContain(first);
+    // the most recently used agents are the ones kept
+    expect(live.map((a) => a.id)).toContain(ids[13]);
+    await busy;
+    // an evicted session still works: its agent is rebuilt from the stored history
+    const res = await env.rt.agent(ids[1]!).run('hello');
+    expect(res.text.length).toBeGreaterThan(0);
+  });
+
   it('delegates to parallel subagents', async () => {
     const session = env.rt.createSession({ source: 'test' });
     const agent = env.rt.agent(session.id);

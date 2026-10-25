@@ -95,7 +95,8 @@ let state: AppState = {
   running: [],
   permissions: [],
   clarify: [],
-  sidebarOpen: loadPref('sidebarOpen', true),
+  // on phones the sidebar is an overlay, so start with it closed
+  sidebarOpen: loadPref('sidebarOpen', typeof window === 'undefined' || window.innerWidth > 900),
   rightPanel: loadPref('rightPanel', null),
   settings: null,
   paletteOpen: false,
@@ -329,7 +330,64 @@ export function onFinalText(fn: (text: string) => void): void {
   speakHook = fn;
 }
 
+// Token deltas arrive far faster than the screen refreshes. They are coalesced per session and
+// applied at most ~30 times a second, so a fast model costs one store update + one Markdown
+// render per flush instead of one per token. Any other event flushes first, keeping order intact.
+type Delta = { kind: 'text' | 'thinking'; text: string };
+const pendingDeltas = new Map<string, Delta[]>();
+let frame = 0;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let lastFlush = 0;
+const FLUSH_EVERY_MS = 32; // ~30 updates/s reads as perfectly smooth streaming text
+
+function flushDeltas(): void {
+  if (frame) cancelAnimationFrame(frame);
+  if (timer) clearTimeout(timer);
+  frame = 0;
+  timer = undefined;
+  if (!pendingDeltas.size) return;
+  lastFlush = performance.now();
+  const batch = [...pendingDeltas];
+  pendingDeltas.clear();
+  let chats = state.chats;
+  for (const [id, deltas] of batch) {
+    const cur = chats[id] ?? emptyChat();
+    const live = [...cur.live];
+    for (const d of deltas) {
+      const last = live[live.length - 1];
+      if (last?.kind === d.kind) live[live.length - 1] = { kind: d.kind, text: last.text + d.text };
+      else live.push({ kind: d.kind, text: d.text });
+    }
+    chats = { ...chats, [id]: { ...cur, live } };
+  }
+  setState({ chats });
+}
+
+function queueDelta(sessionId: string, kind: Delta['kind'], text: string): void {
+  const list = pendingDeltas.get(sessionId) ?? [];
+  const last = list[list.length - 1];
+  if (last?.kind === kind) last.text += text;
+  else list.push({ kind, text });
+  pendingDeltas.set(sessionId, list);
+  if (frame || timer) return;
+  // rAF stops in background tabs; a timer keeps hidden windows current at a low rate
+  if (document.hidden) {
+    timer = setTimeout(flushDeltas, 250);
+    return;
+  }
+  const tick = (now: number) => {
+    if (now - lastFlush < FLUSH_EVERY_MS) frame = requestAnimationFrame(tick);
+    else flushDeltas();
+  };
+  frame = requestAnimationFrame(tick);
+}
+
 function handleAgentEvent(sessionId: string, e: AgentEvent): void {
+  if (e.type === 'text_delta' || e.type === 'thinking_delta') {
+    queueDelta(sessionId, e.type === 'text_delta' ? 'text' : 'thinking', e.text);
+    return;
+  }
+  flushDeltas();
   switch (e.type) {
     case 'run_start':
       updateChat(sessionId, () => ({ running: true, runStartedAt: Date.now(), live: [], subagents: {}, notices: [] }));
@@ -337,24 +395,6 @@ function handleAgentEvent(sessionId: string, e: AgentEvent): void {
       break;
     case 'turn_start':
       updateChat(sessionId, () => ({ live: [] }));
-      break;
-    case 'thinking_delta':
-      updateChat(sessionId, (c) => {
-        const live = [...c.live];
-        const last = live[live.length - 1];
-        if (last?.kind === 'thinking') live[live.length - 1] = { kind: 'thinking', text: last.text + e.text };
-        else live.push({ kind: 'thinking', text: e.text });
-        return { live };
-      });
-      break;
-    case 'text_delta':
-      updateChat(sessionId, (c) => {
-        const live = [...c.live];
-        const last = live[live.length - 1];
-        if (last?.kind === 'text') live[live.length - 1] = { kind: 'text', text: last.text + e.text };
-        else live.push({ kind: 'text', text: e.text });
-        return { live };
-      });
       break;
     case 'tool_call_start':
       updateChat(sessionId, (c) => ({ live: [...c.live, { kind: 'tool', id: e.id }], tools: { ...c.tools, [e.id]: { id: e.id, name: e.name } } }));

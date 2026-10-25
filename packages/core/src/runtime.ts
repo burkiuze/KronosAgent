@@ -268,20 +268,44 @@ export class Kronos {
     if (existing) {
       if (opts.onPermission) existing.opts.onPermission = opts.onPermission;
       if (opts.onClarify) existing.opts.onClarify = opts.onClarify;
+      // keep the map in least-recently-used order
+      this.agents.delete(sessionId);
+      this.agents.set(sessionId, existing);
       return existing;
     }
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
     const a = new Agent({ ...opts, runtime: this, session });
     this.agents.set(sessionId, a);
+    this.evictIdleAgents();
     return a;
   }
 
   createAgent(opts: Omit<AgentOptions, 'runtime'>): Agent {
     const a = new Agent({ ...opts, runtime: this });
     this.agents.set(opts.session.id, a);
+    this.evictIdleAgents();
     return a;
   }
+
+  /**
+   * Every open chat keeps a live agent (history, tool specs, caches). Idle ones beyond the cap
+   * are dropped, least recently used first; everything they hold is persisted (messages, todos,
+   * session allow-rules, Codemaster state), so the next message simply rebuilds the agent.
+   */
+  private evictIdleAgents(max = Kronos.MAX_IDLE_AGENTS): void {
+    let idle = 0;
+    for (const a of this.agents.values()) if (!a.isRunning) idle++;
+    for (const [id, a] of this.agents) {
+      if (idle <= max) break;
+      const pending = a.pendingRequests();
+      if (a.isRunning || pending.permissions.length || pending.clarify.length) continue;
+      this.agents.delete(id);
+      idle--;
+    }
+  }
+
+  static MAX_IDLE_AGENTS = 8;
 
   liveAgents(): Agent[] {
     return [...this.agents.values()];

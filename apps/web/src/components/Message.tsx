@@ -4,6 +4,7 @@ import {
   Check,
   CircleCheck,
   Circle,
+  CircleDot,
   Undo2,
   ChevronDown,
   ChevronRight,
@@ -29,6 +30,7 @@ import {
 } from 'lucide-react';
 import type { ImagePart, Message, Part, Todo, ToolMeta } from '../lib/types';
 import type { ToolLive } from '../lib/store';
+import { splitBlocks } from '../lib/streamBlocks';
 import { renderMarkdown } from '../lib/markdown';
 import { toolSummary } from '../lib/format';
 import { t } from '../lib/i18n';
@@ -38,6 +40,26 @@ import { undoLast } from '../lib/store';
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
 });
+
+const MdBlock = memo(function MdBlock({ text, tail }: { text: string; tail: boolean }) {
+  return <div className="md-block" dangerouslySetInnerHTML={{ __html: renderMarkdown(text, { live: tail }) }} />;
+});
+
+/**
+ * Markdown that is still streaming in: finished blocks render once and stay put; only the
+ * growing last block is re-rendered each frame, so long answers cost the same per frame as
+ * short ones.
+ */
+export function StreamingMarkdown({ text }: { text: string }) {
+  const blocks = splitBlocks(text);
+  return (
+    <div className="md">
+      {blocks.map((b, i) => (
+        <MdBlock key={i} text={b} tail={i === blocks.length - 1} />
+      ))}
+    </div>
+  );
+}
 
 function toolIcon(name: string) {
   if (name === 'read_file' || name === 'view_image') return FileText;
@@ -90,13 +112,14 @@ export function Diff({ diff }: { diff: string }) {
   );
 }
 
-export function TodoList({ todos }: { todos: Todo[] }) {
+/** `live` spins the in-progress item; a finished run leaves a static marker instead of a spinner. */
+export function TodoList({ todos, live = false }: { todos: Todo[]; live?: boolean }) {
   return (
     <ul className="todo-list">
       {todos.map((td) => (
         <li key={td.id} className={td.status}>
           <span className="todo-box">
-            {td.status === 'completed' ? <CircleCheck size={18} /> : td.status === 'in_progress' ? <LoaderCircle size={18} className="spin" /> : <Circle size={18} />}
+            {td.status === 'completed' ? <CircleCheck size={18} /> : td.status === 'in_progress' ? live ? <LoaderCircle size={18} className="spin" /> : <CircleDot size={18} /> : <Circle size={18} />}
           </span>
           <span className="todo-text">{td.status === 'in_progress' ? (td.activeForm ?? td.content) : td.content}</span>
         </li>

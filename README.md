@@ -7,7 +7,7 @@
 **One self-improving agent for your terminal, your desktop and every chat app you use.**
 It codes, researches, automates and remembers — with any model, on your machine.
 
-[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [Security](docs/SECURITY.md) · [Türkçe](#türkçe)
+[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Türkçe](#türkçe)
 
 <img src="docs/assets/chat-dark.png" alt="Kronos desktop: chat with tool calls, live plan and the files panel" width="900" />
 
@@ -163,13 +163,14 @@ packages/cli       kronos-agent     the `kronos` command: REPL, subcommands, set
 apps/web           @kronos/web      React UI served by the gateway
 apps/desktop       @kronos/desktop  Electron shell: embedded gateway, tray, shortcuts, updates
 skills/                             bundled skills (SKILL.md)
-docs/                               analysis, architecture, configuration, messaging, security
+docs/                               analysis, architecture, configuration, messaging, security, performance
 ```
 
 ```bash
 npm run build        # packages + web UI
 npm test             # unit + integration tests (vitest)
 npm run test:e2e     # drives the real UI in Chromium (needs playwright)
+npm run bench        # CPU / memory of the UI and gateway (see docs/PERFORMANCE.md)
 npm run typecheck
 ```
 

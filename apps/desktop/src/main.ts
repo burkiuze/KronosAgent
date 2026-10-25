@@ -118,11 +118,32 @@ function trayIcon(): Electron.NativeImage {
 // ---------------------------------------------------------------------------------------------
 // window
 
+// A window hidden to the tray still holds a full renderer process (~100+ MB). If it stays
+// hidden for a while it is released; the gateway keeps running and the next open rebuilds it.
+const RELEASE_HIDDEN_AFTER_MS = 10 * 60_000;
+let releaseTimer: NodeJS.Timeout | undefined;
+
+function hideWindow(): void {
+  win?.hide();
+  clearTimeout(releaseTimer);
+  releaseTimer = setTimeout(() => {
+    if (win && !win.isVisible()) win.destroy();
+  }, RELEASE_HIDDEN_AFTER_MS);
+  releaseTimer.unref();
+}
+
+/** Messages to the UI; a (re)built window gets them once its page and preload have loaded. */
+function deliver(channel: string, value: string): void {
+  if (!win) return;
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', () => win?.webContents.send(channel, value));
+  else win.webContents.send(channel, value);
+}
+
 function send(command: string): void {
   if (!win) createWindow();
   win?.show();
   win?.focus();
-  win?.webContents.send('kronos:command', command);
+  deliver('kronos:command', command);
 }
 
 function createWindow(): void {
@@ -182,26 +203,31 @@ function createWindow(): void {
     remember();
     if (!quitting && prefs.closeToTray && backend?.gateway) {
       e.preventDefault();
-      win?.hide();
+      hideWindow();
       if (isMac) app.dock?.hide();
     }
   });
-  win.on('show', () => isMac && void app.dock?.show());
+  win.on('show', () => {
+    clearTimeout(releaseTimer);
+    if (isMac) void app.dock?.show();
+  });
   win.on('closed', () => (win = null));
 }
 
 function toggleWindow(): void {
   if (!win) return createWindow();
-  if (win.isVisible() && win.isFocused()) win.hide();
+  if (win.isVisible() && win.isFocused()) hideWindow();
   else {
     win.show();
     win.focus();
-    win.webContents.send('kronos:command', 'focus-composer');
+    deliver('kronos:command', 'focus-composer');
   }
 }
 
 // ---------------------------------------------------------------------------------------------
 // tray + menus
+
+let traySignature = '';
 
 function rebuildTray(): void {
   if (!backend) return;
@@ -212,6 +238,10 @@ function rebuildTray(): void {
   }
   const embedded = Boolean(backend.gateway);
   const platforms = backend.gateway?.platforms.statuses().filter((p) => p.enabled) ?? [];
+  // polled every 15 s: only rebuild the native menu when something it shows has changed
+  const signature = JSON.stringify([embedded, platforms.map((p) => [p.label, p.state]), prefs.closeToTray, prefs.openAtLogin]);
+  if (signature === traySignature) return;
+  traySignature = signature;
   const menu: MenuItemConstructorOptions[] = [
     { label: 'Open Kronos', click: () => send('focus-composer') },
     { label: 'New agent', accelerator: 'CommandOrControl+N', click: () => send('new-chat') },
@@ -379,7 +409,7 @@ function handleDeepLink(url: string): void {
     else if (path.startsWith('settings')) send(`settings:${path.split('/')[1] ?? 'model'}`);
     else if (path.startsWith('view/')) send(`view:${path.split('/')[1]}`);
     const prompt = u.searchParams.get('prompt');
-    if (prompt) win?.webContents.send('kronos:prompt', prompt);
+    if (prompt) deliver('kronos:prompt', prompt);
   } catch {
     /* ignore malformed links */
   }

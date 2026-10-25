@@ -75,6 +75,36 @@ try {
     await page.goto(`${gw.url}/?token=e2e-token`);
     await page.locator('.welcome').waitFor({ timeout: 15000 });
   });
+  await check('welcome screen: greeting and a minimal composer', async () => {
+    await page.locator('.welcome-title', { hasText: 'KRONOS AGENT' }).waitFor({ timeout: 5000 });
+    await page.locator('.welcome .composer textarea[placeholder="Message Kronos"]').waitFor({ timeout: 5000 });
+    await page.locator('.welcome .me-effort', { hasText: 'Medium' }).waitFor({ timeout: 5000 });
+  });
+  await check('long menus scroll inside the window', async () => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    await page.locator('.welcome .composer-bar .cbtn.icon').first().click();
+    const box = await page.locator('.menu .plus-menu').evaluate((el) => {
+      const menu = el.closest('.menu');
+      const r = menu.getBoundingClientRect();
+      return { bottom: r.bottom, scrolls: menu.scrollHeight > menu.clientHeight, vh: innerHeight };
+    });
+    if (box.bottom > box.vh || !box.scrolls) throw new Error(`menu does not fit/scroll: ${JSON.stringify(box)}`);
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+  await check('idle UI does no per-frame work', async () => {
+    // regression guard: an always-on animation once forced ~60 style + layout passes a second
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Performance.enable');
+    const read = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]));
+    await page.waitForTimeout(500);
+    const a = await read();
+    await page.waitForTimeout(2000);
+    const b = await read();
+    const perSecond = (b.RecalcStyleCount - a.RecalcStyleCount + (b.LayoutCount - a.LayoutCount)) / 2;
+    await cdp.detach();
+    if (perSecond > 3) throw new Error(`idle UI restyles/lays out ${perSecond.toFixed(1)}×/s`);
+  });
   await check('chats with the demo model', async () => {
     await send('Hello Kronos!');
     await page.locator('.assistant-turn').filter({ hasText: /Kronos/ }).first().waitFor({ timeout: 15000 });

@@ -1,15 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Download, GitFork, KeyRound, Minimize2, Pencil, RefreshCw, RotateCcw, Trash2, Undo2, Bug, Search as SearchIcon, Newspaper, CalendarClock, Code, Feather, CircleCheck, Circle, LoaderCircle } from 'lucide-react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, Download, GitFork, KeyRound, Minimize2, Pencil, RefreshCw, RotateCcw, Trash2, Undo2, CircleCheck, Circle, LoaderCircle } from 'lucide-react';
 import { chatOf, deleteSession, loadSession, openSession, refreshSessions, renameSession, sendMessage, setState, toast, undoLast, useStore } from '../lib/store';
 import { downloadUrl, post } from '../lib/api';
 import { t } from '../lib/i18n';
 import { shortDuration, tokens as fmtTokens } from '../lib/format';
 import type { Message, Part } from '../lib/types';
-import { AssistantTurn, Markdown, ThinkingBlock, TodoList, ToolCard, UserMessage } from './Message';
+import { AssistantTurn, Markdown, StreamingMarkdown, ThinkingBlock, TodoList, ToolCard, UserMessage } from './Message';
 import { ClarifyCard, PermissionCard, SubagentPanel } from './Cards';
 import { Composer } from './Composer';
 import { Menu, MenuItem } from './ui';
-import { KronosMark } from './Logo';
 
 type Item =
   | { kind: 'user'; m: Message }
@@ -36,39 +35,19 @@ function buildItems(messages: Message[]): { items: Item[]; results: Map<string, 
   return { items, results };
 }
 
-const SUGGESTIONS = [
-  { icon: Code, title: 'Understand this codebase', prompt: 'Explore this project and give me a clear overview: what it does, how it is structured, how to build and test it, and the riskiest parts.' },
-  { icon: Bug, title: 'Fix failing tests', prompt: 'Run the test suite, find out why tests fail, fix the root causes and re-run until green. Summarize the fixes.' },
-  { icon: SearchIcon, title: 'Deep research', prompt: 'Research the latest developments on <topic> using several sources in parallel and write a cited briefing with key takeaways.' },
-  { icon: CalendarClock, title: 'Daily briefing', prompt: 'Every weekday at 8am, search the web for news about AI agents and send me a 5-bullet summary.' },
-  { icon: Newspaper, title: 'Draft release notes', prompt: 'Look at the recent git commits and draft polished release notes grouped by features, fixes and breaking changes.' },
-  { icon: Feather, title: 'Remember my preferences', prompt: 'Interview me briefly about how I like to work (tools, style, tone) and save what you learn to your memory.' },
-];
-
 function Welcome() {
-  const status = useStore((s) => s.status);
+  const demo = useStore((s) => Boolean(s.status?.demo));
   return (
     <div className="welcome">
-      <KronosMark size={68} />
-      <h1>{t('chat.welcome')}</h1>
-      <p className="muted">{t('chat.welcomeSub')}</p>
-      {status?.demo && (
-        <div className="demo-banner">
-          <span>{t('chat.demo')}</span>
-          <button className="btn small primary" onClick={() => setState({ settings: 'keys' })}>
-            <KeyRound size={13} /> {t('chat.addKey')}
-          </button>
-        </div>
-      )}
+      <h1 className="welcome-title">KRONOS AGENT</h1>
       <Composer centered />
-      <div className="suggestions">
-        {SUGGESTIONS.map((s) => (
-          <button key={s.title} className="suggestion" onClick={() => void sendMessage(s.prompt)}>
-            <s.icon size={16} />
-            <span>{s.title}</span>
-          </button>
-        ))}
-      </div>
+      {demo && (
+        <button className="welcome-demo" onClick={() => setState({ settings: 'keys' })}>
+          <KeyRound size={13} />
+          <span>{t('chat.demo')}</span>
+          <b>{t('chat.addKey')}</b>
+        </button>
+      )}
     </div>
   );
 }
@@ -178,8 +157,11 @@ function ChatHeader({ sessionId }: { sessionId: string }) {
 }
 
 /** Right-hand rail: the task at a glance and its live plan (like a PR checklist). */
-function ProgressRail({ sessionId }: { sessionId: string }) {
-  const chat = useStore((s) => chatOf(s.currentId));
+const ProgressRail = memo(function ProgressRail({ sessionId }: { sessionId: string }) {
+  const chat = useStore((s) => {
+    const c = chatOf(s.currentId);
+    return { running: c.running, todos: c.todos, usage: c.usage, runStartedAt: c.runStartedAt, lastRunMs: c.lastRunMs };
+  });
   const session = useStore((s) => s.sessions.find((x) => x.id === sessionId));
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -209,13 +191,13 @@ function ProgressRail({ sessionId }: { sessionId: string }) {
         {todos.length > 0 && (
           <div className="rail-progress">
             <div className="rail-label">{t('progress.title')}</div>
-            <TodoList todos={todos} />
+            <TodoList todos={todos} live={chat.running} />
           </div>
         )}
       </div>
     </aside>
   );
-}
+});
 
 export function ChatView() {
   const currentId = useStore((s) => s.currentId);
@@ -295,7 +277,7 @@ export function ChatView() {
                 <div className={`assistant-turn live ${lastIsAssistant ? 'continued' : ''}`}>
                   {live.map((li, i) => {
                     if (li.kind === 'thinking') return <ThinkingBlock key={i} text={li.text} live={i === live.length - 1} />;
-                    if (li.kind === 'text') return <Markdown key={i} text={li.text} />;
+                    if (li.kind === 'text') return <StreamingMarkdown key={i} text={li.text} />;
                     const tl = chat.tools[li.id];
                     return tl ? <ToolCard key={li.id} id={li.id} name={tl.name} input={tl.input} live={tl} pending /> : null;
                   })}

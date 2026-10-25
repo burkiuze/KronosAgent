@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, Brain, Check, ChevronDown, FilePen, FileText, Folder, Hand, ListChecks, Mic, MicOff, Paperclip, Plus, Square, X, Zap, type LucideIcon } from 'lucide-react';
 import { get, api } from '../lib/api';
 import { chatOf, getState, loadSession, newChat, sendMessage, undoLast, setSessionMode, setState, stopRun, toast, useStore } from '../lib/store';
@@ -70,9 +70,14 @@ async function fileToPart(f: File): Promise<ImagePart | FilePart> {
   return { type: 'file', name: f.name, mediaType: f.type || 'application/octet-stream', path: res.path, size: f.size, text: `(uploaded to ${res.path} — use tools to read it)` };
 }
 
-export function Composer({ centered }: { centered?: boolean }) {
+// memoized: the chat view re-renders on every streaming flush, the composer has no reason to
+export const Composer = memo(function Composer({ centered }: { centered?: boolean }) {
   const currentId = useStore((s) => s.currentId);
-  const chat = useStore((s) => chatOf(s.currentId));
+  // only the fields the composer shows: streaming text changes the chat many times a second
+  const chat = useStore((s) => {
+    const c = chatOf(s.currentId);
+    return { running: c.running, queue: c.queue, context: c.context };
+  });
   const sessions = useStore((s) => s.sessions);
   const draftMode = useStore((s) => s.draftMode);
   const status = useStore((s) => s.status);
@@ -212,11 +217,62 @@ export function Composer({ centered }: { centered?: boolean }) {
   };
 
   const sendOnEnter = config?.ui?.sendOnEnter !== false;
-  const placeholder = currentId ? t('composer.followup') : t('chat.placeholder');
+  const placeholder = currentId ? t('composer.followup') : centered ? t('composer.welcome') : t('chat.placeholder');
   const modeInfo = modeLabel(MODE_IDS.includes(mode) ? mode : 'ask');
   const modelRef = session?.model || getState().draftModel || status?.model?.ref;
   const modelName = useModelName(modelRef, modelRef === status?.model?.ref ? status?.model?.name : undefined);
   const effort = (config?.model?.effort as EffortLevel | undefined) ?? 'medium';
+
+  const modeOptions = (close: () => void) =>
+    MODE_IDS.map(modeLabel).map((m) => (
+      <button
+        key={m.id}
+        className={`mode-option ${m.id === mode ? 'selected' : ''}`}
+        onClick={() => {
+          close();
+          if (currentId) void setSessionMode(currentId, m.id);
+          else setState({ draftMode: m.id });
+        }}
+      >
+        <m.Icon size={16} />
+        <span className="mode-text">
+          <b>{m.label}</b>
+          <small>{m.hint}</small>
+        </span>
+        {m.id === mode && <Check size={14} />}
+      </button>
+    ));
+
+  const effortMenu = (
+    <Menu
+      up={!centered}
+      align={centered ? 'right' : 'left'}
+      trigger={(open) =>
+        centered ? (
+          <button className={`cbtn me-effort ${effort === 'codemaster' ? 'codemaster' : ''}`} onClick={open} title={t('effort.label')}>
+            <span className="cbtn-label">{t(`effort.${effort}`)}</span>
+            <ChevronDown size={13} className="cbtn-chev" />
+          </button>
+        ) : (
+          <button className={`cbtn ${effort === 'codemaster' ? 'codemaster' : ''}`} onClick={open} title={t('effort.label')}>
+            <Brain size={16} />
+            <span className="cbtn-label">{t(`effort.${effort}`)}</span>
+          </button>
+        )
+      }
+    >
+      {(close) => (
+        <EffortMenu
+          value={effort}
+          onPick={(ef) => {
+            // Codemaster stays open so its banner can play; other levels close right away
+            if (ef !== 'codemaster') close();
+            void updateConfig({ model: { effort: ef } });
+          }}
+        />
+      )}
+    </Menu>
+  );
 
   return (
     <div
@@ -268,7 +324,7 @@ export function Composer({ centered }: { centered?: boolean }) {
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} />
         <textarea
           ref={ref}
-          rows={centered ? 2 : 1}
+          rows={1}
           value={text}
           placeholder={placeholder}
           onChange={(e) => {
@@ -317,7 +373,7 @@ export function Composer({ centered }: { centered?: boolean }) {
             )}
           >
             {(close) => (
-              <>
+              <div className={centered ? 'plus-menu' : undefined}>
                 <MenuItem icon={<Paperclip size={14} />} onClick={() => (close(), fileInput.current?.click())}>
                   {t('composer.attach')}
                 </MenuItem>
@@ -327,71 +383,54 @@ export function Composer({ centered }: { centered?: boolean }) {
                 <MenuItem icon={<Zap size={14} />} onClick={() => (close(), setText('/'), ref.current?.focus())}>
                   {t('composer.command')}
                 </MenuItem>
-              </>
-            )}
-          </Menu>
-          <Menu
-            up={!centered}
-            trigger={(open) => (
-              <button className={`cbtn mode-${mode}`} onClick={open} title={modeInfo.hint}>
-                <modeInfo.Icon size={16} />
-                <span className="cbtn-label">{modeInfo.label}</span>
-                <ChevronDown size={13} className="cbtn-chev" />
-              </button>
-            )}
-          >
-            {(close) => (
-              <div className="mode-menu">
-                {MODE_IDS.map(modeLabel).map((m) => (
-                  <button
-                    key={m.id}
-                    className={`mode-option ${m.id === mode ? 'selected' : ''}`}
-                    onClick={() => {
-                      close();
-                      if (currentId) void setSessionMode(currentId, m.id);
-                      else setState({ draftMode: m.id });
-                    }}
-                  >
-                    <m.Icon size={16} />
-                    <span className="mode-text">
-                      <b>{m.label}</b>
-                      <small>{m.hint}</small>
-                    </span>
-                    {m.id === mode && <Check size={14} />}
-                  </button>
-                ))}
+                {centered && (
+                  <>
+                    {/* the welcome composer keeps its bar minimal, so permissions live here */}
+                    <div className="menu-sep" />
+                    <div className="menu-title">{t('composer.permissions')}</div>
+                    {modeOptions(close)}
+                  </>
+                )}
               </div>
             )}
           </Menu>
-          <ContextRing percent={chat.context?.percent ?? 0} />
-          <ModelPicker>
-            <span className="cbtn" title={modelRef}>
-              {modelRef && !modelRef.startsWith('kronos:') && <ProviderLogo id={modelRef.split(':')[0] ?? ''} label={modelRef} size={20} />}
-              <span className="cbtn-label">{modelName}</span>
-              <ChevronDown size={13} className="cbtn-chev" />
-            </span>
-          </ModelPicker>
-          <Menu
-            up={!centered}
-            trigger={(open) => (
-              <button className={`cbtn ${effort === 'codemaster' ? 'codemaster' : ''}`} onClick={open} title={t('effort.label')}>
-                <Brain size={16} />
-                <span className="cbtn-label">{t(`effort.${effort}`)}</span>
-              </button>
-            )}
-          >
-            {(close) => (
-              <EffortMenu
-                value={effort}
-                onPick={(ef) => {
-                  close();
-                  void updateConfig({ model: { effort: ef } });
-                }}
-              />
-            )}
-          </Menu>
+          {!centered && (
+            <>
+              <Menu
+                up
+                trigger={(open) => (
+                  <button className={`cbtn mode-${mode}`} onClick={open} title={modeInfo.hint}>
+                    <modeInfo.Icon size={16} />
+                    <span className="cbtn-label">{modeInfo.label}</span>
+                    <ChevronDown size={13} className="cbtn-chev" />
+                  </button>
+                )}
+              >
+                {(close) => <div className="mode-menu">{modeOptions(close)}</div>}
+              </Menu>
+              <ContextRing percent={chat.context?.percent ?? 0} />
+              <ModelPicker>
+                <span className="cbtn" title={modelRef}>
+                  {modelRef && !modelRef.startsWith('kronos:') && <ProviderLogo id={modelRef.split(':')[0] ?? ''} label={modelRef} size={20} />}
+                  <span className="cbtn-label">{modelName}</span>
+                  <ChevronDown size={13} className="cbtn-chev" />
+                </span>
+              </ModelPicker>
+              {effortMenu}
+            </>
+          )}
           {chat.queue.length > 0 && <span className="cbtn-note">{t('chat.queued')} · {chat.queue.length}</span>}
           <div className="flex-1" />
+          {centered && (
+            <span className="model-effort">
+              <ModelPicker compact down>
+                <span className="cbtn me-model" title={modelRef}>
+                  {modelName}
+                </span>
+              </ModelPicker>
+              {effortMenu}
+            </span>
+          )}
           <button className={`cbtn icon ${listening ? 'recording' : ''}`} title="Voice input" onClick={toggleVoice}>
             {listening ? <MicOff size={16} /> : <Mic size={16} />}
           </button>
@@ -408,4 +447,4 @@ export function Composer({ centered }: { centered?: boolean }) {
       </div>
     </div>
   );
-}
+});

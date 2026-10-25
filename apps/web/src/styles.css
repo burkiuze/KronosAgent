@@ -542,6 +542,7 @@ kbd {
 
 .session-item .dot {
   display: none;
+  position: relative;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -562,8 +563,17 @@ kbd {
 .session-item .dot.running {
   background: var(--accent);
   opacity: 1;
-  box-shadow: 0 0 0 0 var(--accent);
-  animation: ring 1.4s infinite;
+}
+
+/* the pulse is a scaled, fading copy of the dot: transform + opacity run on the compositor,
+   whereas an animated box-shadow restyles and repaints every frame */
+.session-item .dot.running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ring 1.4s ease-out infinite;
 }
 
 .session-item .dot.attention {
@@ -573,10 +583,12 @@ kbd {
 
 @keyframes ring {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+    opacity: 0.6;
+    transform: scale(1);
   }
   100% {
-    box-shadow: 0 0 0 6px transparent;
+    opacity: 0;
+    transform: scale(3);
   }
 }
 
@@ -676,6 +688,10 @@ kbd {
   position: absolute;
   top: calc(100% + 4px);
   min-width: 210px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   background: var(--elev);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -961,6 +977,19 @@ kbd {
   margin-bottom: 0;
 }
 
+/* streaming markdown renders one wrapper per block; they lay out as if the wrapper were absent */
+.md-block {
+  display: contents;
+}
+
+.md > .md-block:first-child > :first-child {
+  margin-top: 0;
+}
+
+.md > .md-block:last-child > :last-child {
+  margin-bottom: 0;
+}
+
 .md p {
   margin: 0.5em 0;
 }
@@ -1109,23 +1138,19 @@ kbd {
   font-size: 0.95em;
 }
 
+/* "Thinking…" breathes with opacity alone, which the compositor animates without restyling or
+   repainting the text every frame (a background-position sweep did both, for as long as the
+   model thinks) */
 .shimmer {
-  background: linear-gradient(90deg, var(--faint) 0%, var(--text) 50%, var(--faint) 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer 1.6s linear infinite;
+  animation: breathe 1.6s ease-in-out infinite;
 }
 
-@keyframes shimmer {
-  from {
-    background-position: 200% 0;
-  }
-  to {
-    background-position: -200% 0;
+@keyframes breathe {
+  50% {
+    opacity: 0.45;
   }
 }
+
 
 /* tool cards */
 .tool-card {
@@ -1785,7 +1810,6 @@ kbd {
 .ctx-fill {
   stroke: var(--dim);
   stroke-linecap: round;
-  transition: stroke-dasharray 0.4s;
 }
 
 .ctx-ring.hot .ctx-fill {
@@ -1838,11 +1862,11 @@ kbd {
 }
 
 .send-btn {
-  width: 38px;
-  height: 38px;
-  border-radius: 11px;
-  background: var(--accent);
-  color: var(--accent-fg);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--panel);
   display: inline-grid;
   place-items: center;
   flex: none;
@@ -1861,6 +1885,7 @@ kbd {
 .send-btn.stop {
   background: var(--text);
   color: var(--panel);
+  border-radius: 50%;
 }
 
 .chip {
@@ -1953,78 +1978,119 @@ kbd {
   white-space: nowrap;
 }
 
-/* welcome */
+/* welcome: a single greeting above one composer, centered in the view */
 .welcome {
-  max-width: 760px;
+  max-width: 780px;
+  min-height: 100%;
   margin: 0 auto;
-  padding: 11vh 28px 40px;
+  padding: 48px 28px 14vh;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
+}
+
+.welcome-title {
+  margin: 0;
+  font-size: 2.15em;
+  font-weight: 500;
+  letter-spacing: 0.035em;
+  color: var(--text);
   text-align: center;
 }
 
-.welcome h1 {
-  font-size: 1.9em;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  margin: 14px 0 4px;
-}
-
-.welcome > p {
-  margin: 0;
-  max-width: 560px;
-}
-
 .welcome .composer-wrap {
-  text-align: left;
+  padding: 26px 0 0;
 }
 
-.demo-banner {
-  display: flex;
+.welcome .composer {
+  border-radius: 26px;
+  padding: 16px 12px 10px 18px;
+  border-color: color-mix(in srgb, var(--border) 55%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.welcome .composer textarea {
+  min-height: 30px;
+  padding: 2px 2px 16px;
+}
+
+.welcome .composer-bar {
+  margin-left: -8px;
+  gap: 2px;
+  flex-wrap: nowrap;
+}
+
+.model-effort {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 16px;
-  padding: 8px 10px 8px 14px;
-  border-radius: var(--radius);
-  background: var(--elev);
-  border: 1px solid var(--border);
+  min-width: 0;
+}
+
+.model-effort .menu-wrap:first-child,
+.model-effort .menu-wrap:first-child > span {
+  min-width: 0;
+}
+
+.cbtn.me-model {
+  display: block;
+  line-height: 34px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 4px;
   color: var(--dim);
-  font-size: 0.88em;
-  text-align: left;
 }
 
-.suggestions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  width: 100%;
-  margin-top: 6px;
+.cbtn.me-effort {
+  gap: 4px;
+  padding-left: 4px;
 }
 
-.suggestion {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 13px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: transparent;
-  text-align: left;
-  font-size: 0.88em;
-  color: var(--dim);
-  transition: transform 0.12s, border-color 0.12s, background 0.12s;
+.me-effort .cbtn-label {
+  color: #6b54d6;
 }
 
-.suggestion:hover {
-  border-color: color-mix(in srgb, var(--text) 25%, var(--border));
-  background: var(--hover);
-  color: var(--text);
+[data-mode='dark'] .me-effort .cbtn-label {
+  color: #a89cf7;
 }
 
-.suggestion svg {
+.welcome .send-btn:disabled {
+  opacity: 0.92;
+}
+
+.plus-menu {
+  width: 300px;
+}
+
+.welcome-demo {
+  margin-top: 14px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 0.84em;
+  line-height: 1.5;
+  text-align: center;
   color: var(--faint);
-  flex: none;
+}
+
+.welcome-demo svg {
+  vertical-align: -2px;
+  margin-right: 7px;
+}
+
+.welcome-demo b {
+  margin-left: 7px;
+  color: var(--dim);
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.welcome-demo:hover {
+  background: var(--hover);
+}
+
+.welcome-demo:hover b {
+  color: var(--text);
 }
 
 .kronos-mark {
@@ -2276,6 +2342,8 @@ button.sb-item:hover,
   box-shadow: var(--shadow-lg);
   z-index: 60;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   animation: pop 0.12s ease-out;
   font-size: 13px;
 }
@@ -2283,6 +2351,11 @@ button.sb-item:hover,
 .model-picker.up {
   left: auto;
   right: 0;
+}
+
+.model-picker.down {
+  bottom: auto;
+  top: calc(100% + 6px);
 }
 
 .model-search {
@@ -2294,8 +2367,11 @@ button.sb-item:hover,
 }
 
 .model-list {
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: 340px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 4px;
 }
 
@@ -3686,9 +3762,12 @@ button.sb-item:hover,
 
 /* responsive */
 @media (max-width: 900px) {
+  /* the sidebar and right panel float over the content here, so the grid has one column */
   .app,
-  .app.with-right {
-    grid-template-columns: 0 minmax(0, 1fr);
+  .app.with-right,
+  .app.no-sidebar,
+  .app.no-sidebar.with-right {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar {
@@ -3712,10 +3791,6 @@ button.sb-item:hover,
     bottom: var(--status-h);
     width: min(420px, 100vw);
     z-index: 30;
-  }
-
-  .suggestions {
-    grid-template-columns: 1fr 1fr;
   }
 
   .page-top,
@@ -3743,6 +3818,15 @@ button.sb-item:hover,
   .composer-wrap {
     padding-left: 14px;
     padding-right: 14px;
+  }
+
+  .welcome {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .welcome-title {
+    font-size: 1.8em;
   }
 }
 
@@ -3798,54 +3882,37 @@ button.sb-item:hover,
 .effort-option.codemaster {
   position: relative;
   overflow: hidden;
-  min-height: 64px;
-  padding: 0 16px;
-  background: #24163f;
+}
+
+.effort-option.codemaster.on {
   color: #fff;
+  background: #22163f;
 }
 
-.effort-option.codemaster:hover .cm-art {
-  filter: brightness(1.15);
-}
-
-.effort-option.codemaster.selected {
-  box-shadow: inset 0 0 0 2px #a78bfa;
-}
-
-.cm-art {
+.cm-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   image-rendering: pixelated;
-  shape-rendering: crispEdges;
-  transition: filter 0.15s;
+  pointer-events: none;
 }
 
-.cm-text {
+.cm-name {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  max-width: 64%;
 }
 
-.cm-text .effort-name {
-  font-size: 1.12em;
-  font-weight: 650;
-  letter-spacing: 0.01em;
+.effort-title {
+  text-align: center;
+  font-weight: 600;
+  padding: 6px 0 8px;
 }
 
-.cm-text small {
-  color: #d8ccff;
-  font-size: 0.74em;
-  line-height: 1.3;
-}
-
-.cm-check {
-  position: absolute;
-  right: 10px;
-  top: 8px;
-  color: #fff;
+.effort-foot {
+  margin: 6px 6px 2px;
+  font-size: 0.8em;
+  line-height: 1.45;
+  color: var(--faint);
 }
 
 .cbtn.codemaster {
@@ -4026,4 +4093,26 @@ button.sb-item:hover,
 
 .model-group .pv-badge {
   background: transparent;
+}
+
+.model-picker > :not(.model-list) {
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Long threads: turns scrolled out of view skip style, layout and paint until they come back.
+   `auto` remembers each turn's last rendered height, so the scrollbar does not jump. */
+.thread > .user-msg:not(.pending),
+.thread > .assistant-turn:not(.live):not(:last-child) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
 }
