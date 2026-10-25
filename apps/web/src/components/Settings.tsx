@@ -28,9 +28,10 @@ import { api, del, downloadUrl, get, post, put } from '../lib/api';
 import { setState, toast, useStore } from '../lib/store';
 import { cfgGet, loadConfig, pathPatch, updateConfig, useConfig, type Config } from '../lib/config';
 import { THEMES } from '../lib/themes';
-import { LANGUAGES, getLang, setLang, t } from '../lib/i18n';
+import { t } from '../lib/i18n';
 import { Badge, Modal, Toggle } from './ui';
 import { KronosMark } from './Logo';
+import { ProviderConnect } from './ProviderConnect';
 import type { McpStatus, ModelInfo } from '../lib/types';
 
 type Kind = 'toggle' | 'select' | 'number' | 'text' | 'textarea' | 'list' | 'model';
@@ -48,11 +49,18 @@ interface Def {
   placeholder?: string;
 }
 
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'].map((v) => ({ value: v, label: v }));
+const EFFORTS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium (recommended)' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high' },
+  { value: 'max', label: 'Maximum' },
+  { value: 'codemaster', label: 'Codemaster — max effort + plan, parallel agents, tests, review' },
+];
 
 const DEFS: Def[] = [
   { section: 'model', key: 'model.default', label: 'Default model', desc: '"auto" picks the best configured provider. Use provider:model, e.g. anthropic:claude-opus-5-5.', kind: 'model' },
-  { section: 'model', key: 'model.effort', label: 'Reasoning effort', desc: 'How hard the model thinks. high/xhigh for agentic coding, low for chat.', kind: 'select', options: EFFORTS },
+  { section: 'model', key: 'model.effort', label: 'Reasoning effort', desc: 'How hard the model thinks. Medium is the balanced default; Codemaster adds a plan → parallel exploration → tests → independent review workflow.', kind: 'select', options: EFFORTS },
   { section: 'model', key: 'model.thinking', label: 'Extended thinking', desc: 'Let models reason before answering (where supported).', kind: 'toggle' },
   { section: 'model', key: 'model.showThinking', label: 'Show thinking', desc: 'Stream reasoning summaries into the chat.', kind: 'toggle' },
   { section: 'model', key: 'model.fallbacks', label: 'Fallback models', desc: 'Tried in order when the primary model fails.', kind: 'list', placeholder: 'openai:gpt-5.5, openrouter:…' },
@@ -143,7 +151,7 @@ const SECTIONS: { id: string; label: string; icon: typeof Sparkles; group: numbe
   { id: 'voice', label: 'Voice', icon: Mic, group: 0 },
   { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, group: 0 },
   { id: 'gateway', label: 'Gateway', icon: Radio, group: 1 },
-  { id: 'keys', label: 'API Keys', icon: KeyRound, group: 1 },
+  { id: 'keys', label: 'Providers & API keys', icon: KeyRound, group: 1 },
   { id: 'tools', label: 'Skills & Tools', icon: Package, group: 1 },
   { id: 'mcp', label: 'MCP', icon: Network, group: 1 },
   { id: 'about', label: 'About', icon: Info, group: 2 },
@@ -219,7 +227,6 @@ function Card({ title, desc, badge, children }: { title: string; desc?: string; 
 
 function Appearance({ config }: { config: Config }) {
   const ui = config.ui ?? {};
-  const lang = getLang();
   return (
     <>
       <Card title="Color mode" desc="Pick a fixed mode or follow your system setting." badge={ui.mode}>
@@ -275,16 +282,6 @@ function Appearance({ config }: { config: Config }) {
               </button>
             );
           })}
-        </div>
-      </Card>
-      <Card title="Language" desc="Interface language.">
-        <div className="choice-grid two">
-          {LANGUAGES.map((l) => (
-            <button key={l.id} className={`choice ${lang === l.id ? 'selected' : ''}`} onClick={() => setLang(l.id)}>
-              <b>{l.label}</b>
-              {lang === l.id && <Check size={14} className="choice-check" />}
-            </button>
-          ))}
         </div>
       </Card>
       <Card title="Text & density">
@@ -359,63 +356,13 @@ function Keys() {
   };
   return (
     <>
-      <Card title="Model providers" desc="Keys are stored in ~/.kronos/.env (never in config files).">
-        {providers.filter((p) => p.envKeys.length).map((p) => row(p.envKeys[0] as string, p.label, p.docsUrl))}
+      <Card title={t('pv.title')} desc={t('pv.desc')}>
+        <ProviderConnect onChanged={load} />
       </Card>
-      <Card title="Local models" desc="Ollama, LM Studio and any OpenAI-compatible server need no key.">
-        {providers
-          .filter((p) => p.local && p.id !== 'kronos')
-          .map((p) => (
-            <div key={p.id} className="key-row">
-              <div className="key-meta">
-                <b>{p.label}</b>
-                <code>{p.baseUrl}</code>
-              </div>
-              <input defaultValue={p.baseUrl} onBlur={(e) => e.target.value !== p.baseUrl && void updateConfig({ providers: { [p.id]: { baseUrl: e.target.value } } })} />
-            </div>
-          ))}
+      <Card title="Tools & integrations" desc="Web search, image, voice and other service keys.">
+        {other.map((k) => row(k.name, k.name.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())))}
       </Card>
-      <Card title="Tools & integrations">{other.map((k) => row(k.name, k.name.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())))}</Card>
-      <CustomProviders />
     </>
-  );
-}
-
-function CustomProviders() {
-  const { config } = useConfig();
-  const list: { id: string; label?: string; baseUrl: string; apiKey?: string; models?: string[] }[] = config?.customProviders ?? [];
-  const [draft, setDraft] = useState({ id: '', baseUrl: '', apiKey: '', models: '' });
-  return (
-    <Card title="Custom OpenAI-compatible endpoints" desc="vLLM, llama.cpp, LiteLLM, Azure, corporate gateways…">
-      {list.map((c) => (
-        <div key={c.id} className="key-row">
-          <div className="key-meta">
-            <b>{c.label ?? c.id}</b>
-            <code>{c.baseUrl}</code>
-          </div>
-          <span className="muted small">{(c.models ?? []).join(', ')}</span>
-          <button className="icon-btn tiny" onClick={() => void updateConfig({ customProviders: list.filter((x) => x.id !== c.id) })}>
-            <Trash2 size={13} />
-          </button>
-        </div>
-      ))}
-      <div className="inline-form">
-        <input placeholder="id (e.g. myvllm)" value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
-        <input placeholder="base URL (…/v1)" value={draft.baseUrl} onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} />
-        <input placeholder="API key or ${ENV_VAR}" value={draft.apiKey} onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })} />
-        <input placeholder="models (comma separated)" value={draft.models} onChange={(e) => setDraft({ ...draft, models: e.target.value })} />
-        <button
-          className="btn small"
-          disabled={!draft.id || !draft.baseUrl}
-          onClick={() => {
-            void updateConfig({ customProviders: [...list, { id: draft.id, baseUrl: draft.baseUrl, apiKey: draft.apiKey || undefined, models: draft.models.split(',').map((x) => x.trim()).filter(Boolean) }] });
-            setDraft({ id: '', baseUrl: '', apiKey: '', models: '' });
-          }}
-        >
-          <Plus size={12} /> Add
-        </button>
-      </div>
-    </Card>
   );
 }
 

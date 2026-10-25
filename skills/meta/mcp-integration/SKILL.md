@@ -34,7 +34,7 @@ mcp:
       exclude: [delete_page]     # optionally hide risky tools (glob patterns)
 ```
 
-Secrets go in `~/.kronos/.env` (Settings → API Keys) and are referenced as `${VAR}`; never
+Secrets go in `~/.kronos/.env` (Settings → Providers & API keys) and are referenced as `${VAR}`; never
 paste tokens into chat history or config files that might be shared.
 
 ## Choose servers

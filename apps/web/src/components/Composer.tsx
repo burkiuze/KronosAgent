@@ -7,6 +7,8 @@ import { VoiceInput } from '../lib/voice';
 import { t } from '../lib/i18n';
 import type { FilePart, ImagePart, ModelInfo, PermissionMode } from '../lib/types';
 import { ModelPicker } from './ModelPicker';
+import { EffortMenu, type EffortLevel } from './EffortMenu';
+import { ProviderLogo } from './ProviderConnect';
 import { Menu, MenuItem } from './ui';
 
 interface Command {
@@ -18,8 +20,6 @@ interface Command {
 const MODE_IDS: PermissionMode[] = ['ask', 'auto-edit', 'yolo', 'plan'];
 const MODE_ICONS: Record<PermissionMode, LucideIcon> = { ask: Hand, 'auto-edit': FilePen, yolo: Zap, plan: ListChecks };
 const modeLabel = (m: PermissionMode) => ({ id: m, label: t(`mode.${m}`), hint: t(`mode.${m}.hint`), Icon: MODE_ICONS[m] });
-
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 // friendly model names for the composer (fetched once)
 let modelNames: Record<string, string> | null = null;
@@ -216,7 +216,7 @@ export function Composer({ centered }: { centered?: boolean }) {
   const modeInfo = modeLabel(MODE_IDS.includes(mode) ? mode : 'ask');
   const modelRef = session?.model || getState().draftModel || status?.model?.ref;
   const modelName = useModelName(modelRef, modelRef === status?.model?.ref ? status?.model?.name : undefined);
-  const effort = (config?.model?.effort as (typeof EFFORTS)[number] | undefined) ?? 'high';
+  const effort = (config?.model?.effort as EffortLevel | undefined) ?? 'medium';
 
   return (
     <div
@@ -366,6 +366,7 @@ export function Composer({ centered }: { centered?: boolean }) {
           <ContextRing percent={chat.context?.percent ?? 0} />
           <ModelPicker>
             <span className="cbtn" title={modelRef}>
+              {modelRef && !modelRef.startsWith('kronos:') && <ProviderLogo id={modelRef.split(':')[0] ?? ''} label={modelRef} size={20} />}
               <span className="cbtn-label">{modelName}</span>
               <ChevronDown size={13} className="cbtn-chev" />
             </span>
@@ -373,21 +374,20 @@ export function Composer({ centered }: { centered?: boolean }) {
           <Menu
             up={!centered}
             trigger={(open) => (
-              <button className="cbtn" onClick={open} title={t('effort.label')}>
+              <button className={`cbtn ${effort === 'codemaster' ? 'codemaster' : ''}`} onClick={open} title={t('effort.label')}>
                 <Brain size={16} />
                 <span className="cbtn-label">{t(`effort.${effort}`)}</span>
               </button>
             )}
           >
             {(close) => (
-              <>
-                <div className="menu-title">{t('effort.label')}</div>
-                {EFFORTS.map((ef) => (
-                  <MenuItem key={ef} icon={ef === effort ? <Check size={14} /> : <span className="menu-icon-gap" />} onClick={() => (close(), void updateConfig({ model: { effort: ef } }))}>
-                    {t(`effort.${ef}`)}
-                  </MenuItem>
-                ))}
-              </>
+              <EffortMenu
+                value={effort}
+                onPick={(ef) => {
+                  close();
+                  void updateConfig({ model: { effort: ef } });
+                }}
+              />
             )}
           </Menu>
           {chat.queue.length > 0 && <span className="cbtn-note">{t('chat.queued')} · {chat.queue.length}</span>}

@@ -108,7 +108,7 @@ interface Plan {
 }
 
 const DEMO_NOTE =
-  '\n\n> _Kronos is running in **offline demo mode**. Add an API key in **Settings → API Keys** (or run `kronos setup`) to unlock a real model._';
+  '\n\n> _Kronos is running in **offline demo mode**. Add an API key in **Settings → Providers & API keys** (or run `kronos setup`) to unlock a real model._';
 
 function route(input: string, tools: Set<string>): Plan {
   const t = input.trim();
@@ -191,7 +191,7 @@ function route(input: string, tools: Set<string>): Plan {
         'oturumlar arasında hatırlayabilir, otomasyon zamanlayabilir, işleri paralel alt ajanlara dağıtabilir ve Telegram, Discord, ' +
         'Slack gibi uygulamalardan seninle konuşabilirim.\n\nDene: `dosyaları listele`, `çalıştır git status`, `bir plan yap`, ' +
         '`her gün 9\'da bana hava durumunu gönder`.' +
-        '\n\n> _Kronos şu an **çevrimdışı demo modunda**. Gerçek bir model için **Ayarlar → API Anahtarları** bölümünden anahtar ekle (ya da `kronos setup` çalıştır)._',
+        '\n\n> _Kronos şu an **çevrimdışı demo modunda**. Gerçek bir model için **Settings → Providers & API keys** bölümünden anahtar ekle (ya da `kronos setup` çalıştır)._',
       calls: [],
     };
   }

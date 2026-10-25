@@ -1,4 +1,4 @@
-import type { Effort, PermissionMode } from '../types.js';
+import type { EffortSetting, PermissionMode } from '../types.js';
 
 export interface ProviderConfig {
   apiKey?: string;
@@ -61,7 +61,7 @@ export interface KronosConfig {
   model: {
     default: string;
     fallbacks: string[];
-    effort: Effort;
+    effort: EffortSetting;
     thinking: boolean;
     showThinking: boolean;
     maxOutputTokens: number;
@@ -184,7 +184,7 @@ export function defaultConfig(): KronosConfig {
     model: {
       default: 'auto',
       fallbacks: [],
-      effort: 'high',
+      effort: 'medium',
       thinking: true,
       showThinking: true,
       maxOutputTokens: 64000,

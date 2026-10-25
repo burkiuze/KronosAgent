@@ -1,5 +1,4 @@
 import { baseUrl, token } from './api';
-import { getLang } from './i18n';
 
 type Recognition = {
   lang: string;
@@ -33,7 +32,7 @@ export class VoiceInput {
     const Ctor = ((window as unknown as Record<string, unknown>).SpeechRecognition || (window as unknown as Record<string, unknown>).webkitSpeechRecognition) as (new () => Recognition) | undefined;
     if (Ctor) {
       const rec = new Ctor();
-      rec.lang = getLang() === 'tr' ? 'tr-TR' : navigator.language || 'en-US';
+      rec.lang = navigator.language || 'en-US';
       rec.interimResults = true;
       rec.continuous = true;
       rec.onresult = (e) => {
@@ -125,7 +124,7 @@ export async function speak(text: string, mode: 'browser' | 'server' = 'browser'
   if (!('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(clean);
-  u.lang = getLang() === 'tr' ? 'tr-TR' : navigator.language || 'en-US';
+  u.lang = navigator.language || 'en-US';
   window.speechSynthesis.speak(u);
 }
 

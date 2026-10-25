@@ -106,6 +106,7 @@ export class Agent {
   private readonly policy: PermissionPolicy;
   private controller?: AbortController;
   private running = false;
+  private codemasterActive = false;
   private currentRunId = '';
   private pendingPermissions = new Map<string, (d: PermissionDecision) => void>();
   private pendingClarify = new Map<string, (a: string) => void>();
@@ -420,6 +421,24 @@ export class Agent {
       this.append([userMsg]);
       this.emit({ type: 'message', runId, message: userMsg });
 
+      // Codemaster: max effort plus a rigorous workflow, announced when it is switched on or off
+      const codemaster = cfg.model.effort === 'codemaster' && this.depth === 0;
+      if (codemaster !== this.codemasterActive) {
+        const wasOn = this.codemasterActive;
+        this.codemasterActive = codemaster;
+        if (codemaster || wasOn) {
+          this.append([
+            {
+              id: newId('m_'),
+              role: 'system',
+              parts: [{ type: 'text', text: codemaster ? codemasterDirective(this.toolSpecs.map((t) => t.name)) : 'Codemaster mode is now off: return to your normal workflow.' }],
+              createdAt: Date.now(),
+              meta: { kind: 'note' },
+            },
+          ]);
+        }
+      }
+
       // learning-loop nudge
       const turns = this.userTurnIndex();
       const every = cfg.agent.nudges.memoryEvery;
@@ -430,7 +449,7 @@ export class Agent {
             role: 'system',
             parts: [{ type: 'text', text: 'Periodic reminder: if this conversation revealed durable facts about the user, their preferences or the environment, save them with the memory tool (briefly) before continuing.' }],
             createdAt: Date.now(),
-            meta: { kind: 'notice' },
+            meta: { kind: 'note' },
           },
         ]);
       }
@@ -450,7 +469,7 @@ export class Agent {
           messages: this.messages,
           tools: this.toolSpecs,
           maxTokens,
-          effort: cfg.model.effort,
+          effort: cfg.model.effort === 'codemaster' ? 'max' : cfg.model.effort,
           thinking: cfg.model.thinking,
           showThinking: cfg.model.showThinking,
           temperature: cfg.model.temperature ?? undefined,
@@ -553,7 +572,7 @@ export class Agent {
             role: 'system',
             parts: [{ type: 'text', text: `The previous task took ${toolCallCount} tool calls. If it is a workflow likely to recur, consider capturing it as a skill (skill_manage create) or improving the skill you used.` }],
             createdAt: Date.now(),
-            meta: { kind: 'notice' },
+            meta: { kind: 'note' },
           },
         ]);
       }
@@ -1059,3 +1078,18 @@ export class Agent {
 }
 
 export { primaryArg };
+
+/** Instructions injected when Codemaster is switched on (max effort + a rigorous workflow). */
+export function codemasterDirective(toolNames: string[]): string {
+  const has = (n: string) => toolNames.includes(n);
+  const steps = [
+    'Understand first: read the relevant code, configs and docs before changing anything; ask only if genuinely blocked.',
+    has('todo_write') ? 'Plan: write a todo list (todo_write) of concrete, verifiable steps and keep it updated as you go.' : 'Plan: state a short list of concrete, verifiable steps before starting.',
+    has('delegate') ? 'Explore in parallel: when the work spans several areas, delegate explorer/researcher subagents with self-contained briefs to gather context concurrently.' : '',
+    'Implement in small, coherent steps that match the existing style; prefer root-cause fixes over workarounds.',
+    'Verify with evidence: run the relevant tests, type-checks, linters and builds; reproduce bugs before fixing them; never claim success you have not observed.',
+    has('delegate') ? 'Review before finishing: delegate a reviewer subagent to critique the full diff for bugs, edge cases, security and missing tests, then fix every finding that holds up.' : 'Review before finishing: re-read the full diff adversarially for bugs, edge cases, security and missing tests, and fix what you find.',
+    'Report: what changed and why, how it was verified (commands and results), and any remaining risks or follow-ups.',
+  ].filter(Boolean);
+  return `CODEMASTER MODE is on. The user wants the most thorough, highest-quality result and accepts extra time and cost. Work like a principal engineer:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
+}

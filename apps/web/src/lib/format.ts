@@ -1,15 +1,13 @@
-import { getLang } from './i18n';
 
 export function relTime(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
-  const tr = getLang() === 'tr';
-  if (s < 45) return tr ? 'şimdi' : 'now';
+  if (s < 45) return 'now';
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}${tr ? 'dk' : 'm'}`;
+  if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}${tr ? 'sa' : 'h'}`;
+  if (h < 24) return `${h}h`;
   const d = Math.floor(h / 24);
-  if (d < 7) return `${d}${tr ? 'g' : 'd'}`;
+  if (d < 7) return `${d}d`;
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
@@ -26,13 +24,12 @@ export function cost(usd = 0): string {
 
 /** Compact duration: 12s · 2m · 1h 5m */
 export function shortDuration(ms: number): string {
-  const tr = getLang() === 'tr';
   const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}${tr ? 'sn' : 's'}`;
+  if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}${tr ? 'dk' : 'm'}`;
+  if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
-  return `${h}${tr ? 'sa' : 'h'}${m % 60 ? ` ${m % 60}${tr ? 'dk' : 'm'}` : ''}`;
+  return `${h}h${m % 60 ? ` ${m % 60}m` : ''}`;
 }
 
 export function clock(ms: number): string {

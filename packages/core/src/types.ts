@@ -80,7 +80,8 @@ export interface Message {
 
 export interface MessageMeta {
   /** compaction summary, synthetic notices, slash-command expansions, ... */
-  kind?: 'summary' | 'notice' | 'command' | 'skill' | 'cron' | 'subagent' | 'platform';
+  /** notice = shown to the user; note = instruction for the model only (hidden in UIs) */
+  kind?: 'summary' | 'notice' | 'note' | 'command' | 'skill' | 'cron' | 'subagent' | 'platform';
   interrupted?: boolean;
   source?: string;
   author?: string;
@@ -109,6 +110,8 @@ export type StopReason =
   | 'error';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+/** Configurable effort: a provider effort level, or Codemaster (max effort + a rigorous plan/verify/review workflow). */
+export type EffortSetting = Effort | 'codemaster';
 
 // ---------------------------------------------------------------------------
 // Tools

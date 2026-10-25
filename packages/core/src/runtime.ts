@@ -128,7 +128,11 @@ export class Kronos {
     return k;
   }
 
-  private loadConfig(overrides?: unknown): void {
+  /** Launch-time overrides (flags, embedding apps, tests) survive every reload. */
+  private overrides?: unknown;
+
+  private loadConfig(overrides: unknown = this.overrides): void {
+    this.overrides = overrides;
     const loaded = loadConfig({ home: this.home, profileRoot: this.paths.root, cwd: this.cwd, overrides });
     this.config = loaded.config;
     this.rawConfig = loaded.raw;

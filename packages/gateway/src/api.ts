@@ -148,6 +148,25 @@ export function buildApi(gw: Gateway): Router {
 
   // ---------------------------------------------------------------- models
   r.get('/api/providers', () => rt().providers.statuses());
+  r.post('/api/providers/:id/test', async (req) => {
+    const b = await req.body<{ apiKey?: string }>().catch(() => ({}) as { apiKey?: string });
+    return rt().providers.testConnection(req.params.id as string, { apiKey: b.apiKey?.trim() || undefined });
+  });
+  /** Verify a key first; save it to .env only when the provider accepts it. */
+  r.post('/api/providers/:id/connect', async (req) => {
+    const id = req.params.id as string;
+    const { apiKey } = await req.body<{ apiKey: string }>();
+    const status = rt().providers.statuses().find((p) => p.id === id);
+    const envKey = status?.envKeys[0];
+    if (!status || !envKey) throw new HttpError(400, `${id} does not take an API key`);
+    if (!apiKey?.trim()) throw new HttpError(400, 'apiKey is required');
+    const result = await rt().providers.testConnection(id, { apiKey: apiKey.trim() });
+    if (result.ok) {
+      updateDotenv(join(rt().home, '.env'), { [envKey]: apiKey.trim() });
+      rt().reload();
+    }
+    return { ...result, saved: result.ok };
+  });
   r.get('/api/models', async (req) => {
     const p = req.query.get('provider') ?? undefined;
     return { models: await rt().providers.listModels(p), default: rt().providers.resolve(), aliases: modelAliases() };

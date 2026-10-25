@@ -10,7 +10,7 @@ Kronos reads, in increasing priority:
 
 Every key can be edited in the app (**Settings**, searchable), with `kronos config set <key>
 <value>`, or by hand (`kronos config edit`). Values may reference environment variables:
-`${NAME}` or `${NAME:-default}`. Secrets belong in `~/.kronos/.env` (Settings → API Keys or
+`${NAME}` or `${NAME:-default}`. Secrets belong in `~/.kronos/.env` (Settings → Providers & API keys or
 `kronos keys set NAME`), which is loaded automatically and never displayed in full.
 
 ```bash
@@ -26,7 +26,7 @@ kronos config path                 # where the file lives
 |---|---|---|
 | `model.default` | `auto` | `provider:model` or an alias (`opus`, `sonnet`, `haiku`, `fable`, `gpt`, `gemini`, `hermes`, `grok`, `deepseek`, `kimi`, `local`, `demo`). `auto` picks the best configured provider. |
 | `model.fallbacks` | `[]` | Tried in order when the primary fails with a non-retryable or exhausted error. |
-| `model.effort` | `high` | `low` · `medium` · `high` · `xhigh` · `max` — reasoning effort where supported. |
+| `model.effort` | `medium` | `low` · `medium` (recommended) · `high` · `xhigh` · `max` · `codemaster` — reasoning effort; Codemaster = max effort plus a plan → parallel exploration → tests → independent review workflow. |
 | `model.thinking` / `model.showThinking` | `true` / `true` | Extended thinking, and streaming its summaries to the UI. |
 | `model.maxOutputTokens` | `64000` | Upper bound per response (clamped to the model's limit). |
 | `model.temperature` | `null` | Only sent to models that accept sampling parameters. |

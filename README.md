@@ -93,9 +93,13 @@ any OpenAI-compatible endpoint as a custom provider. Hermes-style models that em
   mentions, `!shell`, multi-line input, queued follow-ups, Ctrl-C to interrupt.
 - **Desktop app** (Electron) and **web UI**: sessions with pins/projects/archive, live tool cards,
   permission and question cards, files panel with editor, real PTY terminal, command palette,
-  9 themes × light/dark (default: neutral Graphite), English/Turkish UI, voice input/output,
+  9 themes × light/dark (default: neutral Graphite), English UI (Kronos replies in your language), voice input/output,
   insights dashboard. Every turn ends with a "N files changed · Undo" summary and long tasks
   get a live Progress checklist beside the chat.
+- **Effort levels & Codemaster**: Low, Medium (recommended), High, Extra high, Maximum — and
+  **Codemaster**: max effort plus a plan → parallel exploration → tests → independent-review workflow.
+- **Connect any provider from Settings**: pick a provider (with its logo), paste the key — it is
+  verified live before it is saved — then choose the default model.
 - **Messaging**: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, webhooks, Home Assistant —
   with pairing codes for new users, in-chat approvals (`/approve`, `/deny`), `/model`, `/mode`,
   `/undo`, `/retry`, voice-memo transcription and per-platform profiles.
@@ -125,6 +129,7 @@ MCP servers from other agents. Project instruction files are picked up automatic
 | <img src="docs/assets/welcome-dark.png" alt="Welcome screen" /> | <img src="docs/assets/chat-light.png" alt="Chat in light mode with files panel" /> |
 | <img src="docs/assets/skills-dark.png" alt="Skills library" /> | <img src="docs/assets/messaging-light.png" alt="Messaging platforms" /> |
 | <img src="docs/assets/automations-dark.png" alt="Automations" /> | <img src="docs/assets/settings-dark.png" alt="Settings" /> |
+| <img src="docs/assets/providers-dark.png" alt="Connect a provider" /> | |
 
 ## Everyday commands
 
@@ -202,7 +207,7 @@ kronos gateway   # 7/24 çalıştırma: arayüz + mesajlaşma + otomasyonlar + A
 
 Gereksinim: Node.js 20.19+ (22+ önerilir) ve git. API anahtarı olmadan da açılır; çevrimdışı
 demo modeliyle arayüzü, araçları ve izin akışını deneyebilirsiniz. Arayüz dili Ayarlar →
-Görünüm'den ya da komut paletinden (⌘K → "Türkçe") Türkçe yapılabilir.
+Arayüz İngilizcedir; Kronos ise sana senin dilinde yanıt verir.
 
 ### Öne çıkanlar
 

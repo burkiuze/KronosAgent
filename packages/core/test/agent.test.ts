@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentEvent } from '@kronos/core';
-import { toAnthropicMessages, toOpenAIMessages } from '@kronos/core';
+import { messageText, toAnthropicMessages, toOpenAIMessages } from '@kronos/core';
 import { makeRuntime, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
@@ -103,6 +103,24 @@ describe('agent loop (demo model)', () => {
       expect(events.some((e) => e.type === 'notice' && e.text.startsWith('Remembered:'))).toBe(true);
     } finally {
       env.rt.updateConfig({ memory: { autoExtract: false } });
+    }
+  });
+
+  it('codemaster mode injects its workflow once and announces when it turns off', async () => {
+    env.rt.updateConfig({ model: { effort: 'codemaster' } });
+    try {
+      const a = env.rt.agent(env.rt.createSession({ source: 'test' }).id);
+      await a.run('hello');
+      await a.run('list files');
+      const notes = () => env.rt.sessions.messages(a.id).filter((m) => m.role === 'system' && m.meta?.kind === 'note');
+      const on = notes().filter((m) => messageText(m).includes('CODEMASTER MODE'));
+      expect(on).toHaveLength(1);
+      expect(messageText(on[0]!)).toContain('reviewer subagent');
+      env.rt.updateConfig({ model: { effort: 'medium' } });
+      await a.run('hello again');
+      expect(notes().some((m) => messageText(m).includes('Codemaster mode is now off'))).toBe(true);
+    } finally {
+      env.rt.updateConfig({ model: { effort: 'medium' } });
     }
   });
 

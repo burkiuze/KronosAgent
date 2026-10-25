@@ -16,7 +16,6 @@ import { InsightsPage } from './pages/Insights';
 import { getState, newChat, onFinalText, savePref, setState, stopRun, useStore, type View } from './lib/store';
 import { useConfig } from './lib/config';
 import { speak, stopSpeaking } from './lib/voice';
-import { useLang } from './lib/i18n';
 
 const isMac = navigator.platform.toLowerCase().includes('mac');
 
@@ -61,7 +60,6 @@ function runDesktopCommand(command: string): void {
 }
 
 export function App() {
-  useLang();
   const view = useStore((s) => s.view);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const rightPanel = useStore((s) => s.rightPanel);

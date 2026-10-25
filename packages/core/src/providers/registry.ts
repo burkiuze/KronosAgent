@@ -22,6 +22,29 @@ export interface ProviderStatus {
   custom?: boolean;
 }
 
+export interface ConnectionTest {
+  ok: boolean;
+  /** number of models the provider reported */
+  models: number;
+  sample: string[];
+  latencyMs: number;
+  /** false when the provider has no model listing to verify against */
+  verified?: boolean;
+  error?: string;
+}
+
+function describeConnectionError(e: unknown): string {
+  const err = e as { status?: number; message?: string; cause?: { code?: string } };
+  const status = err.status ?? Number(/\b(40[13]|404|429|5\d\d)\b/.exec(err.message ?? '')?.[1] ?? NaN);
+  if (status === 401 || status === 403) return 'The API key was rejected (unauthorized). Check that it is correct and active.';
+  if (status === 404) return 'The endpoint was not found — check the base URL.';
+  if (status === 429) return 'Rate limited or out of credits on this account.';
+  if (status >= 500) return `The provider returned a server error (${status}). Try again shortly.`;
+  const code = err.cause?.code ?? '';
+  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed/i.test(`${code} ${err.message ?? ''}`)) return 'Could not reach the provider — is the URL right and the server running?';
+  return (err.message ?? String(e)).slice(0, 300);
+}
+
 /** Auto-selection order when model.default is "auto". */
 const AUTO_ORDER = ['anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras'];
 
@@ -81,6 +104,13 @@ export class ProviderRegistry {
   get(id: string): Provider {
     const cached = this.cache.get(id);
     if (cached) return cached;
+    const provider = this.build(id);
+    this.cache.set(id, provider);
+    return provider;
+  }
+
+  /** Construct a provider client; `apiKey` overrides the configured key (used to test a key before saving it). */
+  private build(id: string, apiKey?: string): Provider {
     let provider: Provider;
     const custom = this.config.customProviders.find((c) => c.id === id);
     const preset = getPreset(id);
@@ -88,8 +118,8 @@ export class ProviderRegistry {
     if (custom) {
       provider =
         custom.api === 'anthropic'
-          ? new AnthropicProvider({ id, apiKey: custom.apiKey, baseUrl: custom.baseUrl, headers: custom.headers, serverFallbacks: false })
-          : new OpenAICompatProvider({ id, label: custom.label, baseUrl: custom.baseUrl, apiKey: custom.apiKey, headers: custom.headers, flavor: 'generic' });
+          ? new AnthropicProvider({ id, apiKey: apiKey ?? custom.apiKey, baseUrl: custom.baseUrl, headers: custom.headers, serverFallbacks: false })
+          : new OpenAICompatProvider({ id, label: custom.label, baseUrl: custom.baseUrl, apiKey: apiKey ?? custom.apiKey, headers: custom.headers, flavor: 'generic' });
     } else if (!preset) {
       throw new ProviderError(`Unknown provider "${id}". Known: ${this.knownProviderIds().join(', ')}`, id);
     } else if (preset.api === 'demo') {
@@ -97,7 +127,7 @@ export class ProviderRegistry {
     } else if (preset.api === 'anthropic') {
       provider = new AnthropicProvider({
         id,
-        apiKey: this.keyFor(id),
+        apiKey: apiKey ?? this.keyFor(id),
         baseUrl: cfg.baseUrl || undefined,
         headers: cfg.headers,
         serverFallbacks: cfg.serverFallbacks,
@@ -109,14 +139,13 @@ export class ProviderRegistry {
         id,
         label: preset.label,
         baseUrl: cfg.baseUrl || preset.baseUrl,
-        apiKey: this.keyFor(id),
+        apiKey: apiKey ?? this.keyFor(id),
         keyRequired: preset.keyRequired,
         envKeys: preset.envKeys,
         headers: cfg.headers,
         flavor: id === 'openai' ? 'openai' : id === 'openrouter' ? 'openrouter' : preset.local ? 'ollama' : 'generic',
       });
     }
-    this.cache.set(id, provider);
     return provider;
   }
 
@@ -186,6 +215,38 @@ export class ProviderRegistry {
       }
     }
     return out;
+  }
+
+  /**
+   * Check that a provider is reachable and its credentials work by listing its models —
+   * no tokens are spent. Used by the "Connect a provider" flow in the apps.
+   */
+  async testConnection(id: string, opts: { apiKey?: string; timeoutMs?: number } = {}): Promise<ConnectionTest> {
+    const started = Date.now();
+    const timeoutMs = opts.timeoutMs ?? 15_000;
+    const done = (r: Omit<ConnectionTest, 'latencyMs'>): ConnectionTest => ({ ...r, latencyMs: Date.now() - started });
+    if (!this.knownProviderIds().includes(id)) return done({ ok: false, models: 0, sample: [], error: `Unknown provider "${id}"` });
+    if (!opts.apiKey && !this.isConfigured(id)) return done({ ok: false, models: 0, sample: [], error: 'No API key saved for this provider yet.' });
+    let provider: Provider;
+    try {
+      provider = opts.apiKey ? this.build(id, opts.apiKey) : this.get(id);
+    } catch (e) {
+      return done({ ok: false, models: 0, sample: [], error: (e as Error).message });
+    }
+    if (!provider.listModels) {
+      const known = catalogModels().filter((m) => m.provider === id);
+      return done({ ok: true, models: known.length, sample: known.slice(0, 6).map((m) => m.id), verified: false });
+    }
+    try {
+      const live = await Promise.race([
+        provider.listModels(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new ProviderError(`no answer within ${Math.round(timeoutMs / 1000)}s`, id)), timeoutMs)),
+      ]);
+      if (!opts.apiKey) this.liveModels.set(id, live);
+      return done({ ok: true, models: live.length, sample: live.slice(0, 6).map((m) => m.id), verified: true });
+    } catch (e) {
+      return done({ ok: false, models: 0, sample: [], error: describeConnectionError(e) });
+    }
   }
 
   costOf(model: ModelInfo, usage: Parameters<typeof costOf>[1]): number {

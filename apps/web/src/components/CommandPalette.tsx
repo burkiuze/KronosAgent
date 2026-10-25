@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { CalendarClock, ChartColumn, Brain, FileText, MessageSquare, Moon, Palette, Plus, Puzzle, Search, Settings, Sun, PanelRight, SquareTerminal, KeyRound, Languages } from 'lucide-react';
+import { CalendarClock, ChartColumn, Brain, FileText, MessageSquare, Moon, Palette, Plus, Puzzle, Search, Settings, Sun, PanelRight, SquareTerminal, KeyRound } from 'lucide-react';
 import { get } from '../lib/api';
 import { getState, newChat, openSession, savePref, setState, useStore } from '../lib/store';
 import { THEMES } from '../lib/themes';
 import { updateConfig } from '../lib/config';
-import { getLang, setLang, t } from '../lib/i18n';
+import { t } from '../lib/i18n';
 import { relTime } from '../lib/format';
 
 interface Action {
@@ -64,7 +64,6 @@ export function CommandPalette() {
       { id: 'terminal', label: 'Open terminal', icon: <SquareTerminal size={15} />, run: () => (savePref('rightPanel', 'terminal'), setState({ rightPanel: 'terminal' })) },
       { id: 'light', label: 'Light mode', icon: <Sun size={15} />, run: () => void updateConfig({ ui: { mode: 'light' } }, true) },
       { id: 'dark', label: 'Dark mode', icon: <Moon size={15} />, run: () => void updateConfig({ ui: { mode: 'dark' } }, true) },
-      { id: 'lang', label: getLang() === 'tr' ? 'Switch to English' : 'Türkçe arayüze geç', icon: <Languages size={15} />, run: () => setLang(getLang() === 'tr' ? 'en' : 'tr') },
       ...THEMES.map((th) => ({ id: `theme-${th.id}`, label: `Theme: ${th.name}`, icon: <Palette size={15} />, run: () => void updateConfig({ ui: { theme: th.id } }, true) })),
     ],
     [open],

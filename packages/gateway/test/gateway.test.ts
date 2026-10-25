@@ -180,3 +180,52 @@ describe('webhooks', () => {
     expect(signed.status).toBe(200);
   });
 });
+
+describe('provider connection test', () => {
+  it('verifies credentials by listing models', async () => {
+    const { createServer } = await import('node:http');
+    // a fake OpenAI-compatible endpoint that only accepts one key
+    const fake = createServer((req, res) => {
+      if (req.headers.authorization !== 'Bearer good-key') {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        return res.end('{"error":"invalid key"}');
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'fake-large' }, { id: 'fake-small' }] }));
+    });
+    await new Promise<void>((r) => fake.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(fake.address() as { port: number }).port}/v1`;
+    try {
+      const missing = await api('/api/providers/openai/test', { method: 'POST' });
+      expect(missing.ok).toBe(false);
+      expect(missing.error).toMatch(/No API key/);
+
+      await api('/api/config', { method: 'PATCH', body: JSON.stringify({ customProviders: [{ id: 'fakeai', baseUrl: base, apiKey: 'wrong-key' }] }) });
+      const rejected = await api('/api/providers/fakeai/test', { method: 'POST' });
+      expect(rejected.ok).toBe(false);
+      expect(rejected.error).toMatch(/rejected/);
+
+      await api('/api/config', { method: 'PATCH', body: JSON.stringify({ customProviders: [{ id: 'fakeai', baseUrl: base, apiKey: 'good-key' }] }) });
+      const ok = await api('/api/providers/fakeai/test', { method: 'POST' });
+      expect(ok).toMatchObject({ ok: true, models: 2, verified: true });
+      expect(ok.sample).toContain('fake-large');
+      const models = await api<{ models: { ref: string }[] }>('/api/models?provider=fakeai');
+      expect(models.models.map((m) => m.ref)).toContain('fakeai:fake-small');
+
+      // built-in provider: the key is verified first and only saved when accepted
+      await api('/api/config', { method: 'PATCH', body: JSON.stringify({ providers: { mistral: { baseUrl: base } } }) });
+      const keySet = async () => (await api<{ keys: { name: string; set: boolean }[] }>('/api/keys')).keys.find((k) => k.name === 'MISTRAL_API_KEY')?.set;
+      const bad = await api('/api/providers/mistral/connect', { method: 'POST', body: JSON.stringify({ apiKey: 'wrong-key' }) });
+      expect(bad).toMatchObject({ ok: false, saved: false });
+      expect(await keySet()).toBe(false);
+      const good = await api('/api/providers/mistral/connect', { method: 'POST', body: JSON.stringify({ apiKey: 'good-key' }) });
+      expect(good).toMatchObject({ ok: true, saved: true, models: 2 });
+      expect(await keySet()).toBe(true);
+      const providers = await api<{ id: string; configured: boolean }[]>('/api/providers');
+      expect(providers.find((p) => p.id === 'mistral')?.configured).toBe(true);
+      await api('/api/keys', { method: 'PUT', body: JSON.stringify({ name: 'MISTRAL_API_KEY', value: null }) });
+    } finally {
+      fake.close();
+    }
+  });
+});

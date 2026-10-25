@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from 'node:readline';
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
-import type { Agent, Kronos, PermissionDecision, PermissionMode, PermissionRequest, ClarifyRequest, Effort } from '@kronos/core';
+import type { Agent, Kronos, PermissionDecision, PermissionMode, PermissionRequest, ClarifyRequest, EffortSetting } from '@kronos/core';
 import {
   formatCost,
   formatTokens,
@@ -431,13 +431,13 @@ export class Repl {
       this.agent.setMode(this.agent.mode === 'yolo' ? 'ask' : 'yolo');
       this.println(this.modeLabel(this.agent.mode));
     });
-    add('effort', 'Reasoning effort: low | medium | high | xhigh | max', (arg) => {
-      if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(arg)) {
+    add('effort', 'Reasoning effort: low | medium (recommended) | high | xhigh | max | codemaster', (arg) => {
+      if (!['low', 'medium', 'high', 'xhigh', 'max', 'codemaster'].includes(arg)) {
         this.println(`effort: ${rt.config.model.effort}`);
         return;
       }
-      rt.updateConfig({ model: { effort: arg as Effort } });
-      this.println(`${sym.ok} effort → ${arg}`);
+      rt.updateConfig({ model: { effort: arg as EffortSetting } });
+      this.println(`${sym.ok} effort → ${arg}${arg === 'codemaster' ? c.gray('  (max effort · plan → parallel exploration → tests → independent review)') : ''}`);
     }, '[level]');
     add('think', 'Toggle showing thinking', () => {
       rt.updateConfig({ model: { showThinking: !rt.config.model.showThinking } });

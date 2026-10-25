@@ -10,7 +10,7 @@ export { defaultConfig, ALL_TOOLSETS, CONFIG_SECTIONS, type KronosConfig, type M
 export { loadConfig, readYamlFile, writeYamlFile, maskSecrets, saveConfigPatch, setConfigValue, getConfigValue } from './config/load.js';
 export { kronosHome, profileDir, profilePaths, listProfiles, activeProfile, setActiveProfile, expandHome, resolvePath, bundledSkillsDir, PROFILE_NAME_RE } from './config/paths.js';
 
-export { ProviderRegistry, modelAliases, aliasFor, type ProviderStatus } from './providers/registry.js';
+export { ProviderRegistry, modelAliases, aliasFor, type ProviderStatus, type ConnectionTest } from './providers/registry.js';
 export { PROVIDERS, catalogModels, parseModelRef, costOf, getPreset, type ProviderPreset } from './providers/catalog.js';
 export { AnthropicProvider, toAnthropicMessages } from './providers/anthropic.js';
 export { OpenAICompatProvider, toOpenAIMessages, extractInlineToolCalls } from './providers/openai.js';

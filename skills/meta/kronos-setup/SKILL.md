@@ -13,7 +13,7 @@ Prefer doing it for the user when the toolsets allow (editing `~/.kronos/config.
 
 | Want | Desktop / web app | CLI |
 |---|---|---|
-| Add an API key | Settings → API Keys | `kronos keys set ANTHROPIC_API_KEY` |
+| Add an API key | Settings → Providers & API keys (pick a provider, paste the key, it is verified live) | `kronos keys set ANTHROPIC_API_KEY` |
 | Pick a model | model chip in the composer, Settings → Model | `kronos model set <ref>` / `/model` |
 | Fallback models | Settings → Model → Fallback models | `kronos config set model.fallbacks '["openai:gpt-5"]'` |
 | Permission mode | mode chip (Ask / Auto-edit / YOLO / Plan) | `/mode`, `--yolo`, `--plan` |
@@ -34,7 +34,7 @@ Prefer doing it for the user when the toolsets allow (editing `~/.kronos/config.
 - OpenAI, Google Gemini, OpenRouter (hundreds of models with one key), Groq, DeepSeek, Mistral,
   xAI, NVIDIA NIM, Nous Portal, Together, Fireworks, Cerebras, Moonshot, Z.ai.
 - Local: Ollama (`ollama:llama3.3`), LM Studio, any OpenAI-compatible server via a custom
-  provider (Settings → API Keys → Custom providers).
+  provider (Settings → Providers & API keys → Custom endpoint).
 - No key at all → offline demo model, so the UI and tools can be explored.
 
 ## Security defaults to explain

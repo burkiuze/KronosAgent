@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
+import { createServer } from 'node:http';
 import { Kronos } from '@kronos/core';
 import { Gateway } from '@kronos/gateway';
 
@@ -27,6 +28,15 @@ const rt = await Kronos.create({
   logLevel: 'silent',
   overrides: { model: { default: 'kronos:demo' }, safety: { mode: 'yolo' }, skills: { claudeCompat: false } },
 });
+// a fake OpenAI-compatible API so the provider "connect" flow can be exercised offline
+const fakeApi = createServer((req, res) => {
+  const ok = req.headers.authorization === 'Bearer sk-good';
+  res.writeHead(ok ? 200 : 401, { 'content-type': 'application/json' });
+  res.end(ok ? JSON.stringify({ data: [{ id: 'gpt-fake-large' }, { id: 'gpt-fake-mini' }] }) : '{"error":{"message":"invalid api key"}}');
+});
+await new Promise((r) => fakeApi.listen(0, '127.0.0.1', r));
+rt.updateConfig({ providers: { openai: { baseUrl: `http://127.0.0.1:${fakeApi.address().port}/v1` } } });
+
 const gw = await Gateway.start(rt, { port: 0, host: '127.0.0.1', platforms: false, cron: false, token: 'e2e-token', quiet: true });
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -115,6 +125,27 @@ try {
     await page.waitForFunction(() => document.documentElement.dataset.theme && document.documentElement.dataset.theme !== 'kronos', null, { timeout: 5000 });
     await page.keyboard.press('Escape');
   });
+  await check('connects a provider from settings', async () => {
+    await page.keyboard.press('Control+,');
+    await page.locator('.settings-nav-item', { hasText: /Providers/ }).click();
+    const openaiTile = page.locator('.pv-tile', { has: page.locator('.pv-name', { hasText: /^OpenAI$/ }) });
+    await openaiTile.click();
+    const keyInput = page.locator('.pv-panel input[type="password"]');
+    await keyInput.fill('sk-wrong');
+    await page.locator('.pv-panel .btn.primary').first().click();
+    await page.locator('.pv-result.error', { hasText: /rejected/ }).waitFor({ timeout: 10000 });
+    await keyInput.fill('sk-good');
+    await page.locator('.pv-panel .btn.primary').first().click();
+    await page.locator('.pv-result.ok').waitFor({ timeout: 10000 });
+    await page.locator('.pv-panel select').selectOption('openai:gpt-fake-large');
+    await page.locator('.pv-panel .btn.primary', { hasText: /default/i }).click();
+    await page.waitForFunction(async () => {
+      const r = await fetch('/api/config', { headers: { authorization: 'Bearer e2e-token' } });
+      return (await r.json()).config.model.default === 'openai:gpt-fake-large';
+    }, null, { timeout: 5000 });
+    await openaiTile.locator('.pv-state.on').waitFor();
+    await page.keyboard.press('Escape');
+  });
   await check('command palette', async () => {
     await page.keyboard.press('Control+k');
     await page.locator('.palette input').waitFor();
@@ -139,6 +170,7 @@ try {
   console.error(`\nE2E failed: ${e.message}`);
 } finally {
   await browser.close();
+  fakeApi.close();
   await gw.close();
   rmSync(home, { recursive: true, force: true });
   rmSync(ws, { recursive: true, force: true });

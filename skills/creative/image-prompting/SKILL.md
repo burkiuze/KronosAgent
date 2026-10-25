@@ -42,5 +42,5 @@ Respect people's likeness and IP: no realistic images of real private individual
 copying a living artist's signature style on request for commercial use.
 
 Without an image provider configured, Kronos falls back to its procedural pixel-art Kronos
-portrait — suggest adding an OpenAI/fal/Replicate key in Settings → API Keys for real
+portrait — suggest adding an OpenAI/fal/Replicate key in Settings → Providers & API keys for real
 generation.

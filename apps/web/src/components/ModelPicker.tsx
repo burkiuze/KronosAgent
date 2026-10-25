@@ -5,6 +5,7 @@ import { getState, setSessionModel, setState, toast, useStore } from '../lib/sto
 import { updateConfig } from '../lib/config';
 import type { ModelInfo } from '../lib/types';
 import { tokens } from '../lib/format';
+import { ProviderLogo } from './ProviderConnect';
 
 interface ProviderStatus {
   id: string;
@@ -67,7 +68,10 @@ export function ModelPicker({ children, compact }: { children: ReactNode; compac
             <div className="model-list">
               {groups.map(([provider, list]) => (
                 <div key={provider}>
-                  <div className="model-group">{providers.find((p) => p.id === provider)?.label ?? provider}</div>
+                  <div className="model-group">
+                    <ProviderLogo id={provider} label={providers.find((p) => p.id === provider)?.label ?? provider} size={18} />
+                    {providers.find((p) => p.id === provider)?.label ?? provider}
+                  </div>
                   {list.map((m) => (
                     <button key={m.ref} className={`model-row ${m.ref === current ? 'active' : ''}`} onClick={() => void choose(m.ref)}>
                       <div>
