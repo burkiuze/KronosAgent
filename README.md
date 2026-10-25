@@ -1,6 +1,6 @@
 # Kronos Agent — website
 
-Landing page for **Kronos Agent**, the open-source agent that grows with you.
+Landing page for **Kronos Agent**, the open-source agent that never forgets.
 
 Static site, no build step:
 
