@@ -76,13 +76,17 @@ describe('verify tool and the verification guard', () => {
   it('asks once for verification when files changed and nothing was verified', async () => {
     writeFileSync(join(env.workspace, 'package.json'), pkg({ test: 'node -e "process.exit(0)"' }));
     const a = env.rt.agent(env.rt.createSession({ source: 'test' }).id);
-    const res = await a.run('create file notes.md');
+    const res = await a.run('create file notes.js');
     const msgs = env.rt.sessions.messages(a.id);
     const notes = msgs.filter((m) => m.meta?.kind === 'note' && messageText(m).includes('have not run verify'));
     expect(notes).toHaveLength(1);
     const verified = msgs.flatMap((m) => m.parts).some((p) => p.type === 'tool_result' && p.toolName === 'verify' && p.content.includes('VERIFY: PASS'));
     expect(verified).toBe(true);
     expect(res.stopReason).toBe('end_turn');
+    // documentation needs no test run
+    const d = env.rt.agent(env.rt.createSession({ source: 'test' }).id);
+    await d.run('create file notes.md');
+    expect(env.rt.sessions.messages(d.id).some((m) => messageText(m).includes('have not run verify'))).toBe(false);
   });
 
   it('does not nag when the project has no checks or the guard is off', async () => {
