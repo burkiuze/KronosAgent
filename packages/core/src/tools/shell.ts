@@ -4,12 +4,20 @@ import { tmpdir } from 'node:os';
 import type { ToolDefinition } from './types.js';
 import { explainExit, which } from '../util/process.js';
 import { resolvePath } from '../config/paths.js';
-import { truncate } from '../util/text.js';
+import { truncate, truncateMiddle } from '../util/text.js';
+
+/** The last part of long output (what a still-running command printed most recently). */
+function truncateTail(text: string, max = 6000): string {
+  return text.length > max ? `…${text.slice(-max)}` : truncateMiddle(text, max).text;
+}
 import { formatDuration } from '../util/misc.js';
 import { detectProjectChecks, failureHighlights, type ProjectCheck } from '../agent/checks.js';
 
-function formatRun(r: { output: string; exitCode: number | null; signal: NodeJS.Signals | null; timedOut: boolean; aborted: boolean; durationMs: number }, timeoutSec: number): string {
+function formatRun(r: { output: string; exitCode: number | null; signal: NodeJS.Signals | null; timedOut: boolean; aborted: boolean; durationMs: number; adopted?: string }, timeoutSec: number): string {
   const out = r.output.replace(/\s+$/, '');
+  if (r.adopted) {
+    return `${out ? `${truncateTail(out)}\n` : ''}[still running after ${timeoutSec}s — it keeps running in the background as ${r.adopted}. Use process(action:"output", id:"${r.adopted}") to follow it, process(action:"kill", id:"${r.adopted}") to stop it.]`;
+  }
   const notes: string[] = [];
   if (r.timedOut) notes.push(`timed out after ${timeoutSec}s — for long-running work use background: true`);
   if (r.aborted) notes.push('interrupted by the user');
@@ -27,6 +35,7 @@ export const shellTool: ToolDefinition<{ command: string; timeout?: number; cwd?
     'Run a shell command (bash on Linux/macOS, cmd/PowerShell on Windows) in the configured terminal backend (local, Docker sandbox or SSH). ' +
     'Returns combined stdout/stderr and the exit status. Commands run non-interactively: pass flags like -y / --no-pager, never open editors. ' +
     'Use background: true for servers/watchers, then the `process` tool to read output or stop them. ' +
+    'A command still running at its timeout is not killed: it continues in the background and you get its process id. ' +
     'Prefer dedicated tools for reading/searching/editing files.',
   parameters: {
     type: 'object',
@@ -64,6 +73,8 @@ export const shellTool: ToolDefinition<{ command: string; timeout?: number; cwd?
       env,
       timeoutMs: timeoutSec * 1000,
       signal: ctx.signal,
+      // past its timeout a command is not killed but moves to the background (like Codex's exec sessions)
+      adopt: (child, soFar) => rt.processes.adopt(child, input.command, cwd, soFar, ctx.sessionId).id,
       onData: (chunk) => {
         // only the tail is ever shown as progress: keep memory flat for chatty commands
         buffered = (buffered + chunk).slice(-4000);
@@ -76,8 +87,8 @@ export const shellTool: ToolDefinition<{ command: string; timeout?: number; cwd?
     });
     return {
       content: formatRun(r, timeoutSec),
-      isError: r.exitCode !== 0,
-      meta: { exitCode: r.exitCode, durationMs: r.durationMs, command: input.command },
+      isError: !r.adopted && r.exitCode !== 0,
+      meta: { exitCode: r.exitCode, durationMs: r.durationMs, command: input.command, ...(r.adopted ? { processId: r.adopted } : {}) },
     };
   },
 };

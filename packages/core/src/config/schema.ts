@@ -187,7 +187,11 @@ export interface KronosConfig {
     webhook: PlatformConfigBase & { secret?: string };
     homeassistant: PlatformConfigBase & { url?: string; token?: string };
   };
-  mcp: { servers: Record<string, McpServerConfig> };
+  /**
+   * deferAfter: with more MCP tools than this, they are not sent to the model up front; it finds
+   * and loads the ones it needs with tool_search (Codex-style progressive disclosure). 0 = never defer.
+   */
+  mcp: { servers: Record<string, McpServerConfig>; deferAfter: number };
   hooks: {
     preToolUse: HookConfig[];
     postToolUse: HookConfig[];
@@ -361,7 +365,7 @@ export function defaultConfig(): KronosConfig {
       webhook: { enabled: false, secret: '${KRONOS_WEBHOOK_SECRET}' },
       homeassistant: { enabled: false, url: '', token: '${HASS_TOKEN}' },
     },
-    mcp: { servers: {} },
+    mcp: { servers: {}, deferAfter: 30 },
     hooks: { preToolUse: [], postToolUse: [], userPromptSubmit: [], sessionStart: [], stop: [] },
     cron: { enabled: true, timezone: '', maxConcurrent: 2 },
     ui: {

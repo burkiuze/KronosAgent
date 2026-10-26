@@ -27,6 +27,7 @@ import { resolveRisk } from '../tools/types.js';
 import type { AgentDefinition } from './definitions.js';
 import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
 import { reviewAction } from '../safety/guardian.js';
+import { deferredTools } from '../tools/toolsearch.js';
 import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
 import { LoopWatch } from './watchdog.js';
@@ -53,7 +54,7 @@ const ANNOUNCED_ACTION =
   /(?:^|[.!?:\n]\s*)(?:(?:ok(?:ay)?|now|next|first|then|so),?\s+)?(?:let me|let's|i(?:'ll| will| am going to|'m going to| need to| should))\s+(?:now\s+|first\s+|then\s+)?(?:run|check|read|open|create|write|edit|update|modify|look|search|list|install|test|fix|implement|add|start|try|use|call|execute|inspect|examine|verify|make|change|apply|build|compile|grep|fetch|explore|review|find)\b[^.!?\n]{0,160}[.:…]?\s*$|\S+(?:acağım|eceğim)(?:\s+\S+){0,2}[.:…!]?\s*$/i;
 
 /** The tool set of lean mode: enough to do real work, small enough for a small model to use well. */
-const LEAN_TOOLS = new Set(['repo_map', 'read_file', 'write_file', 'edit_file', 'shell', 'list_dir', 'grep', 'glob', 'todo_write', 'web_search', 'web_fetch', 'memory', 'ask_user', 'verify', 'exit_plan_mode']);
+const LEAN_TOOLS = new Set(['tool_search', 'repo_map', 'read_file', 'write_file', 'edit_file', 'shell', 'list_dir', 'grep', 'glob', 'todo_write', 'web_search', 'web_fetch', 'memory', 'ask_user', 'verify', 'exit_plan_mode']);
 
 /** tools whose results get a syntax check of the files they changed */
 const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);
@@ -239,8 +240,12 @@ export class Agent {
     if (this.depth > 0) exclude.push('ask_user', 'exit_plan_mode');
     if (this.depth >= cfg.agent.subagents.maxDepth) exclude.push('delegate');
     if (!this.opts.team) exclude.push('team_board');
-    const tools = this.rt.tools.resolve(enabled, this.rt, { only, exclude });
-    return [...(lean && !only ? tools.filter((t) => LEAN_TOOLS.has(t.name)) : tools), ...(this.opts.extraTools ?? [])];
+    const deferred = new Set(deferredTools(this.rt, lean && !only).map((t) => t.name));
+    const loaded = new Set(Array.isArray(this.session.meta?.loadedTools) ? (this.session.meta.loadedTools as string[]) : []);
+    const tools = this.rt.tools
+      .resolve(enabled, this.rt, { only, exclude })
+      .filter((t) => (t.name === 'tool_search' ? deferred.size > 0 : !deferred.has(t.name) || loaded.has(t.name)));
+    return [...(lean && !only ? tools.filter((t) => LEAN_TOOLS.has(t.name) || loaded.has(t.name)) : tools), ...(this.opts.extraTools ?? [])];
   }
 
   private ensureContext(model: ModelInfo): void {
@@ -359,6 +364,18 @@ export class Agent {
   noteRead(path: string): void {
     this.readFiles.add(path);
     this.stampFile(path);
+  }
+
+  /** Make deferred tools callable from the next model call on (tool_search). Returns how many were new. */
+  loadTools(names: string[]): number {
+    const have = new Set(this.tools.map((t) => t.name));
+    const add = names.map((n) => this.rt.tools.get(n)).filter((t): t is ToolDefinition => !!t && !have.has(t.name));
+    if (!add.length) return 0;
+    this.tools = [...this.tools, ...add];
+    this.toolSpecs = [...this.toolSpecs, ...this.rt.tools.specs(add, Boolean(this.session.meta?.lean))];
+    const loaded = [...new Set([...(Array.isArray(this.session.meta?.loadedTools) ? (this.session.meta.loadedTools as string[]) : []), ...add.map((t) => t.name)])];
+    this.saveSession({ toolNames: this.tools.map((t) => t.name), meta: { loadedTools: loaded } });
+    return add.length;
   }
 
   /** Remember the version of `path` this agent has seen (after reading or writing it). */
@@ -1225,6 +1242,9 @@ export class Agent {
     }
     // with no verbatim tail the latest request would be lost inside the summary: repeat it word for word
     const latest = !tail.length && lastUser ? truncate(messageText(lastUser), 6000) : '';
+    // like Codex: the user's own words carry the requirements a summary tends to blur, so the
+    // earlier user messages travel along verbatim, newest first, within a budget
+    const kept = this.earlierUserMessages(head, Math.min(20_000, Math.floor(model.contextWindow * 0.08)), latest ? lastUser : undefined);
     const summaryMsg: Message = {
       id: newId('m_'),
       role: 'user',
@@ -1233,6 +1253,7 @@ export class Agent {
           type: 'text',
           text:
             `<conversation_summary>\nThe earlier conversation was compacted to save context. Summary:\n\n${summary}\n</conversation_summary>` +
+            (kept.length ? `\n\nThe user's earlier messages, verbatim (oldest first):\n<earlier_user_messages>\n${kept.map((t) => `<message>\n${t}\n</message>`).join('\n')}\n</earlier_user_messages>` : '') +
             (latest ? `\n\nThe user's most recent request was:\n<latest_request>\n${latest}\n</latest_request>` : '') +
             (tail.length ? '\n\nThe most recent turns follow verbatim.' : '\n\nContinue from here.') +
             ' Re-read files before editing them; do not assume their earlier contents. Earlier details can be found with session_search.',
@@ -1244,6 +1265,42 @@ export class Agent {
     const result = this.replaceHistory([summaryMsg, ...tail], runId, before);
     this.notice('info', `Context compacted: ~${before.toLocaleString()} → ~${result.after.toLocaleString()} tokens${tail.length ? ` (last ${this.rt.config.agent.compaction.keepRecentTurns === 1 ? 'turn' : 'turns'} kept verbatim)` : ''}.`);
     return result;
+  }
+
+  /**
+   * Text of the user's messages in `messages` (including those an earlier compaction carried in its
+   * summary), newest first until `budget` tokens, returned oldest first.
+   */
+  private earlierUserMessages(messages: Message[], budget: number, skip?: Message): string[] {
+    const texts: string[] = [];
+    for (const m of messages) {
+      if (m.role !== 'user' || m === skip) continue;
+      if (m.meta?.kind === 'summary') {
+        const block = /<earlier_user_messages>([\s\S]*?)<\/earlier_user_messages>/.exec(messageText(m))?.[1] ?? '';
+        for (const mm of block.matchAll(/<message>\n([\s\S]*?)\n<\/message>/g)) texts.push(mm[1] as string);
+        continue;
+      }
+      const t = m.parts
+        .filter((p): p is TextPart => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n')
+        .trim();
+      if (t) texts.push(t);
+    }
+    const out: string[] = [];
+    let left = budget;
+    for (let i = texts.length - 1; i >= 0 && left > 200; i--) {
+      const t = texts[i] as string;
+      const cost = estimateTokens(t);
+      if (cost <= left) {
+        out.push(t);
+        left -= cost;
+      } else {
+        out.push(`${truncate(t, left * 4)} [truncated]`);
+        break;
+      }
+    }
+    return out.reverse();
   }
 
   /** Last resort when no summary can be made: keep the recent turns and drop the rest (still archived). */

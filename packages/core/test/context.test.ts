@@ -34,11 +34,17 @@ describe('compaction', () => {
     const archived = env.rt.sessions.archivedMessages(s.id);
     expect(archived.length + live.length - 1).toBe(before);
     expect(userTexts(archived)).toEqual(['list files for ALPHA', 'list files for BRAVO']);
+    // the user's own earlier words travel along verbatim (Codex-style)
+    expect(messageText(live[0]!)).toMatch(/<earlier_user_messages>\n<message>\nlist files for ALPHA\n<\/message>\n<message>\nlist files for BRAVO\n<\/message>/);
     expect(env.rt.sessions.search('BRAVO').some((h) => h.sessionId === s.id)).toBe(true);
     expect((await agent.run('list files again')).stopReason).toBe('end_turn');
     // a second compaction appends to the archive
     await agent.compact();
     expect(userTexts(env.rt.sessions.archivedMessages(s.id))).toEqual(['list files for ALPHA', 'list files for BRAVO', 'list files for CHARLIE']);
+    // …and survive the next compaction, still in order
+    const again = messageText(env.rt.sessions.messages(s.id)[0]!);
+    expect(again.indexOf('list files for ALPHA')).toBeLessThan(again.indexOf('list files for CHARLIE'));
+    expect(again.match(/list files for ALPHA/g)).toHaveLength(1);
   });
 
   it('clears old tool outputs from the context but not from the stored session', async () => {
@@ -190,5 +196,54 @@ describe('guardian in unattended runs', () => {
     const result = env.rt.sessions.messages(r.sessionId).flatMap((m) => m.parts).find((p) => p.type === 'tool_result') as { content: string; isError?: boolean };
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/safety reviewer refused it \(high risk\): force-pushing was never requested/);
+  });
+});
+
+describe('long commands', () => {
+  it('moves a command past its timeout to the background instead of killing it', async () => {
+    const s = env.rt.createSession({ source: 'test' });
+    const agent = env.rt.agent(s.id);
+    const ctx = { runtime: env.rt, agent, sessionId: s.id, cwd: env.workspace, signal: new AbortController().signal, toolCallId: 't', turn: 0, progress() {}, askUser: async () => '', checkpoint() {} } as never;
+    const r = await env.rt.tools.get('shell')!.execute({ command: 'echo started; sleep 2; echo finished > done.txt; echo finished', timeout: 1 }, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toMatch(/^started\n\[still running after 1s — it keeps running in the background as p_\w+/);
+    const id = (r.meta as { processId: string }).processId;
+    for (let i = 0; i < 60 && env.rt.processes.list().find((p) => p.id === id)?.running; i++) await new Promise((res) => setTimeout(res, 100));
+    expect(env.rt.processes.list().find((p) => p.id === id)).toMatchObject({ running: false, exitCode: 0 });
+    expect(env.rt.processes.output(id)).toContain('finished');
+    expect(readFileSync(join(env.workspace, 'done.txt'), 'utf8')).toBe('finished\n');
+  });
+});
+
+describe('tool_search', () => {
+  it('keeps a large MCP tool set out of the request and loads what the model asks for', async () => {
+    const calls: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const what = i === 7 ? 'Create an issue in the Jira project' : `Unrelated operation number ${i} on widgets`;
+      env.rt.tools.register({ name: `mcp__corp__op_${i}`, toolset: 'mcp', risk: 'read', description: `[MCP corp] ${what}`, parameters: { type: 'object', properties: { title: { type: 'string' } } }, async execute(input) { calls.push(`op_${i}:${String(input.title)}`); return { content: 'created JIRA-1' }; } });
+    }
+    const seen: string[][] = [];
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        seen.push(req.tools.map((t) => t.name));
+        step++;
+        const call = (name: string, input: Record<string, unknown>): ChatResponse => ({ parts: [{ type: 'tool_call', id: `c${step}`, name, input } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' });
+        if (step === 1) return call('tool_search', { query: 'jira issue', limit: 2 });
+        if (step === 2) return call('mcp__corp__op_7', { title: 'Broken login' });
+        return { parts: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    await env.rt.agent(s.id).run('file a jira issue about the broken login');
+    expect(seen[0]).toContain('tool_search');
+    expect(seen[0]!.filter((n) => n.startsWith('mcp__'))).toEqual([]);
+    expect(seen[1]).toContain('mcp__corp__op_7');
+    expect(calls).toEqual(['op_7:Broken login']);
+    // the loaded tool stays available in this session
+    expect(env.rt.sessions.get(s.id)?.meta?.loadedTools).toContain('mcp__corp__op_7');
+    env.rt.tools.unregisterWhere((d) => d.name.startsWith('mcp__corp__'));
   });
 });

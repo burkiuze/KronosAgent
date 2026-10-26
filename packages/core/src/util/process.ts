@@ -11,6 +11,11 @@ export interface RunOptions {
   shell?: string;
   onData?: (chunk: string, stream: 'stdout' | 'stderr') => void;
   maxBuffer?: number;
+  /**
+   * On timeout, hand the still-running process over instead of killing it (Codex's unified exec
+   * yields a session id the same way). Returns the id it is known by from then on.
+   */
+  adopt?: (child: ChildProcess, outputSoFar: string) => string;
 }
 
 export interface RunResult {
@@ -23,6 +28,8 @@ export interface RunResult {
   timedOut: boolean;
   aborted: boolean;
   durationMs: number;
+  /** id of the background process the command became after its timeout (see RunOptions.adopt) */
+  adopted?: string;
 }
 
 export function defaultShell(): string {
@@ -95,9 +102,21 @@ export function runProcess(file: string, args: string[], opts: RunOptions = {}):
     if (opts.input !== undefined) child.stdin?.end(opts.input);
     else child.stdin?.end();
 
+    let settled = false;
     const timer = opts.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
+          if (opts.adopt) {
+            child.stdout?.removeAllListeners('data');
+            child.stderr?.removeAllListeners('data');
+            child.removeAllListeners('close');
+            child.removeAllListeners('error');
+            opts.signal?.removeEventListener('abort', onAbort);
+            const id = opts.adopt(child, stripAnsi(output));
+            settled = true;
+            resolve({ stdout: stripAnsi(stdout), stderr: stripAnsi(stderr), output: stripAnsi(output), exitCode: null, signal: null, timedOut: true, aborted: false, durationMs: Date.now() - started, adopted: id });
+            return;
+          }
           killTree(child, 'SIGTERM');
           setTimeout(() => killTree(child, 'SIGKILL'), 3000).unref();
         }, opts.timeoutMs)
@@ -110,6 +129,8 @@ export function runProcess(file: string, args: string[], opts: RunOptions = {}):
     opts.signal?.addEventListener('abort', onAbort, { once: true });
 
     const finish = (code: number | null, sig: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
       if (timer) clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onAbort);
       resolve({

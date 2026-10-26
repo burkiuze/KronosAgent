@@ -53,7 +53,14 @@ export function discoverContextFiles(cwd: string, kronosHome: string, maxEach = 
     if (parent === dir) break;
     dir = parent;
   }
-  for (const d of dirs) for (const f of CONTEXT_FILES) add(join(d, f));
+  for (const d of dirs) {
+    for (const f of CONTEXT_FILES) {
+      // a personal, uncommitted override replaces the shared file (Codex: AGENTS.override.md)
+      if (f === 'AGENTS.md' && existsSync(join(d, 'AGENTS.override.md'))) add(join(d, 'AGENTS.override.md'));
+      else add(join(d, f));
+      if (f === 'CLAUDE.md') add(join(d, 'CLAUDE.local.md'));
+    }
+  }
   return out;
 }
 

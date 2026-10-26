@@ -182,6 +182,32 @@ export class ProcessManager {
     return info;
   }
 
+  /** Take over a running child (a foreground command past its timeout) as a background process. */
+  adopt(child: ChildProcess, command: string, cwd: string, initialOutput: string, sessionId?: string): BackgroundProcess {
+    const info: BackgroundProcess = { id: newId('p_'), command, cwd, pid: child.pid, startedAt: Date.now(), exitCode: null, running: true, sessionId };
+    const entry = { info, child, output: initialOutput.slice(-MAX_BUFFER), readOffset: initialOutput.length > MAX_BUFFER ? MAX_BUFFER : initialOutput.length };
+    const push = (b: Buffer) => {
+      entry.output += stripAnsi(b.toString('utf8'));
+      if (entry.output.length > MAX_BUFFER) {
+        const cut = entry.output.length - MAX_BUFFER;
+        entry.output = entry.output.slice(cut);
+        entry.readOffset = Math.max(0, entry.readOffset - cut);
+      }
+    };
+    child.stdout?.on('data', push);
+    child.stderr?.on('data', push);
+    child.on('close', (code) => {
+      info.running = false;
+      info.exitCode = code;
+    });
+    child.on('error', (e) => {
+      entry.output += `\n[process error] ${e.message}`;
+      info.running = false;
+    });
+    this.procs.set(info.id, entry);
+    return info;
+  }
+
   list(sessionId?: string): BackgroundProcess[] {
     return [...this.procs.values()].map((p) => p.info).filter((p) => !sessionId || p.sessionId === sessionId);
   }
