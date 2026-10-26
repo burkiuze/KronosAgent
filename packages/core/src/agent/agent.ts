@@ -34,7 +34,8 @@ import { checkRun, isNonCodePath } from './evidence.js';
 import { projectRoot } from '../backends/sandbox.js';
 import { injectionNote, scanThreats } from '../safety/threats.js';
 import { recapTranscript } from '../memory/recaps.js';
-import { detectProjectChecks } from './checks.js';
+import { detectProjectChecks, failureHighlights } from './checks.js';
+import { weakenedTests, weakenedTestsNote } from './testguard.js';
 import { TeamBoard } from './board.js';
 import { LoopWatch } from './watchdog.js';
 import { formatSyntaxProblems, syntaxProblems } from '../tools/diagnostics.js';
@@ -1205,6 +1206,14 @@ export class Agent {
         checkNote = `\n\nNote: this exit status is ${run.maskedBy === '|| true' ? 'forced to 0 by `|| true`' : `the one of \`${run.maskedBy ?? 'the last command'}\`, not of the ${run.kind}`} — it does not show whether the ${run.kind} passed. Read the output above, or re-run with \`set -o pipefail;\` or without the pipe.`;
     }
     if (out.isError || (call.name === 'verify' && /VERIFY: FAIL/.test(out.content ?? ''))) this.moaTrouble = true;
+    // a green run bought by weakening the tests is not a fix
+    if (!out.isError && EDIT_TOOLS.has(call.name) && typeof out.meta?.diff === 'string') {
+      const weakened = weakenedTests(out.meta.diff);
+      if (weakened.length) {
+        checkNote += weakenedTestsNote(weakened);
+        this.notice('warn', `Edit weakens tests: ${weakened.join('; ')}`);
+      }
+    }
     let content = (out.content ?? '') + checkNote;
     // untrusted content (web pages, API responses, MCP servers) that tries to instruct the agent is flagged
     if (!out.isError && UNTRUSTED_TOOLS.test(call.name) && content.length > 40) {
@@ -1222,8 +1231,12 @@ export class Agent {
       } catch {
         /* ignore */
       }
-      const t = truncateMiddle(content, limit);
-      content = `${t.text}\n\n[full output (${out.content.length.toLocaleString()} chars) saved to ${file} — read_file/grep it for details]`;
+      // a failing command's errors may sit in the cut middle: the lines worth reading go first
+      const failed = call.name === 'shell' && typeof out.meta?.exitCode === 'number' && out.meta.exitCode !== 0;
+      const hits = failed ? failureHighlights(content, 30) : [];
+      const head = hits.length ? `Failure lines picked from the full output:\n${hits.join('\n')}\n\n--- output (shortened) ---\n` : '';
+      const t = truncateMiddle(content, Math.max(2000, limit - head.length));
+      content = `${head}${t.text}\n\n[full output (${out.content.length.toLocaleString()} chars) saved to ${file} — read_file/grep it for details]`;
       meta = { ...meta, truncated: true, fullOutputPath: file };
     }
     // a file that no longer parses is reported in the same result, while the change is in view

@@ -548,3 +548,48 @@ describe('finishing with open work', () => {
     expect(env.rt.sessions.messages(s2.id).some((m) => messageText(m).startsWith('Before you finish:\n'))).toBe(false);
   });
 });
+
+describe('long failing output', () => {
+  it('puts the failure lines first when the middle of the output is cut', async () => {
+    env.rt.updateConfig({ agent: { toolOutputLimit: 3000 } } as never);
+    // the error sits in the middle of 400 lines of noise
+    writeFileSync(join(env.workspace, 'noisy.js'), "for (let i = 0; i < 200; i++) console.log('ok line ' + i);\nconsole.log('AssertionError: expected 3 to be 4 at parse.test.js:12');\nfor (let i = 0; i < 200; i++) console.log('more noise ' + i);\nprocess.exit(1);\n");
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        step++;
+        if (step === 1) return { parts: [{ type: 'tool_call', id: 's1', name: 'shell', input: { command: 'node noisy.js' } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' };
+        return { parts: [{ type: 'text', text: 'It fails.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    await env.rt.agent(s.id).run('run noisy.js');
+    const result = env.rt.sessions.messages(s.id).flatMap((m) => m.parts).find((p) => p.type === 'tool_result');
+    const content = (result as { content: string }).content;
+    expect(content.startsWith('Failure lines picked from the full output:\nAssertionError: expected 3 to be 4')).toBe(true);
+    expect(content).toContain('[full output');
+    expect(content.length).toBeLessThan(3600);
+  });
+});
+
+describe('weakened tests', () => {
+  it('points out an edit that skips a test, in the edit result', async () => {
+    writeFileSync(join(env.workspace, 'sum.test.js'), "it('adds', () => {\n  expect(sum(1, 2)).toBe(3);\n});\n");
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        step++;
+        if (step === 1) return { parts: [{ type: 'tool_call', id: 'e1', name: 'edit_file', input: { path: 'sum.test.js', old_string: "it('adds'", new_string: "it.skip('adds'" } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' };
+        return { parts: [{ type: 'text', text: 'Done.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    await env.rt.agent(s.id).run('make the tests pass');
+    const result = env.rt.sessions.messages(s.id).flatMap((m) => m.parts).find((p) => p.type === 'tool_result') as { content: string };
+    expect(result.content).toMatch(/this edit weakens tests — sum\.test\.js: skips tests \(it\.skip\)/);
+  });
+});

@@ -274,6 +274,8 @@ This pass targets the failure modes that make an agent's result untrustworthy:
 | Sloppy finishing | system prompt: finish the job, never invent results, "done" means every requirement checked, read back external writes, keep identifiers literal; repository etiquette (dirty worktree, no destructive git, no stray files); outcome-first reports. Models that tend to stop early get an extra execution-discipline block |
 | One model's blind spots | `/moa` and `model.advisors`: other models advise before key steps and after failures; the acting model decides |
 | Reporting success with work left | before the final answer the harness checks the run itself: plan items written in this run that are still open, and a check (verify, tests, lint, typecheck, build) that failed and has not passed since in a run that changed code. One reminder per run; the model fixes it or says plainly what is unfinished |
+| Green runs bought by weakening tests | `agent/testguard`: an edit that removes assertions, skips or focuses tests (`it.skip`, `xit`, `.only`, `@pytest.mark.skip`, `t.Skip`, `#[ignore]`, `@Disabled`…), adds an always-true assertion or deletes a test file is pointed out in the edit's own result |
+| Errors lost in long output | when a failing command's output is shortened, the failure lines from the full output go first |
 | Bugs the author does not see | `agent.selfReview`: when a run changed 15+ lines in a git repository, the review engine (independent reviewers plus the fact-checker) checks the uncommitted changes before the final answer, and confirmed problems go back to the agent once. Default: at the Codemaster effort level |
 
 ### Resource use
