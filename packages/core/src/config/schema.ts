@@ -115,6 +115,11 @@ export interface KronosConfig {
     shell?: string;
     docker: { image: string; workdir: string; extraArgs: string[]; network: boolean };
     ssh: { host: string; user?: string; port?: number; key?: string; workdir?: string };
+    /**
+     * OS sandbox for the local backend (Landlock on Linux, Seatbelt on macOS): "workspace-write"
+     * lets commands change only the project and temp directories, "read-only" only temp
+     */
+    sandbox: { mode: 'off' | 'workspace-write' | 'read-only'; network: boolean; writable: string[]; fallback: 'refuse' | 'unsandboxed' };
   };
   safety: {
     mode: PermissionMode;
@@ -317,6 +322,7 @@ export function defaultConfig(): KronosConfig {
       timeoutSec: 180,
       docker: { image: 'node:22-bookworm', workdir: '/workspace', extraArgs: [], network: true },
       ssh: { host: '' },
+      sandbox: { mode: 'off', network: true, writable: [], fallback: 'refuse' },
     },
     safety: {
       mode: 'ask',

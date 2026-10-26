@@ -13,3 +13,4 @@ coverage/
 apps/desktop/web/
 apps/desktop/skills/
 apps/desktop/build/
+native/*/target/

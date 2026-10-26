@@ -34,6 +34,9 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Build the sandbox helper (Rust, Linux)
+        if: runner.os == 'Linux'
+        run: cargo build --release --manifest-path native/sandbox/Cargo.toml && native/sandbox/target/release/kronos-sandbox --probe
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

@@ -50,7 +50,8 @@ settings on GitHub — GitHub only accepts logos uploaded there.
 
 The app asks for: Contents, Pull requests, Issues (read & write); Metadata, Checks, Commit
 statuses, Actions (read). It subscribes to issue comments, issues, pull request review comments
-and reviews.
+and reviews, and pull requests (for `autoReview`). Apps created before this was added need
+**Pull request** ticked under *Subscribe to events* for `autoReview`.
 
 ## Using it in a chat
 
@@ -83,7 +84,11 @@ When an owner, member or collaborator writes `@kronos <request>` (or `@<your-app
   opens a pull request that closes the issue;
 - a pull request comment, review or inline review comment → it works on the pull request's
   branch and pushes there (for pull requests from forks it opens a follow-up pull request);
-- a question → it just answers.
+- a question → it just answers;
+- `@kronos review` on a pull request → a code review posted as a pull request review, with
+  inline comments and one-click suggestions on the changed lines (nothing is pushed). Text after
+  "review" is passed on as focus. Set `github.bot.autoReview: true` to review every new
+  (non-draft) pull request without being asked. See [REVIEW.md](REVIEW.md).
 
 It reacts with 👀, posts "Kronos is on it", runs the agent in a dedicated checkout with the issue
 or pull request (description, recent comments, the commented code) as context, commits, pushes,

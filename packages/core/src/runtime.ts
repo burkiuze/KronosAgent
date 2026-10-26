@@ -29,6 +29,7 @@ import { HookRunner } from './agent/hooks.js';
 import { CronScheduler, type CronJob } from './cron/scheduler.js';
 import { McpManager } from './mcp/manager.js';
 import { createBackend, ProcessManager, type ExecBackend } from './backends/terminal.js';
+import { detectSandbox } from './backends/sandbox.js';
 import { Agent, type AgentOptions } from './agent/agent.js';
 import { loadAgentDefinitions, type AgentDefinition } from './agent/definitions.js';
 import { sendPlatformMessage, type PlatformId } from './messaging/senders.js';
@@ -565,6 +566,9 @@ export class Kronos {
     out.push({ check: 'Default model', ok: model.provider !== 'kronos', detail: `${model.name} (${model.ref})${model.provider === 'kronos' ? ' — demo mode, add an API key' : ''}` });
     const configured = this.providers.statuses().filter((p) => p.configured && !p.local);
     out.push({ check: 'Providers', ok: configured.length > 0, detail: configured.map((p) => p.label).join(', ') || 'none configured' });
+    const sb = detectSandbox();
+    const sbMode = this.config.terminal.sandbox?.mode ?? 'off';
+    out.push({ check: 'OS sandbox', ok: 'engine' in sb || sbMode === 'off', detail: 'engine' in sb ? `${sb.detail}${sbMode === 'off' ? ' — available, off (terminal.sandbox.mode)' : ` — ${sbMode}`}` : `${sbMode === 'off' ? 'off; ' : ''}${sb.error}` });
     for (const bin of ['git', 'rg', 'python3', 'docker', 'pdftotext']) {
       const p = await which(bin);
       out.push({ check: bin, ok: Boolean(p), detail: p ?? 'not found (optional)' });

@@ -45,7 +45,7 @@ export const shellTool: ToolDefinition<{ command: string; timeout?: number; cwd?
     const rt = ctx.runtime;
     if (input.background) {
       if (rt.config.terminal.backend !== 'local') return { content: 'Background processes are only supported on the local backend; run with a timeout instead.', isError: true };
-      const p = rt.processes.start(input.command, cwd, ctx.sessionId, rt.config.terminal.shell);
+      const p = rt.processes.start(input.command, cwd, ctx.sessionId, rt.config.terminal.shell, rt.config.terminal.sandbox);
       await new Promise((r) => setTimeout(r, 1500));
       const early = rt.processes.output(p.id, { tail: 40 });
       const status = rt.processes.list().find((x) => x.id === p.id);

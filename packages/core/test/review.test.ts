@@ -294,3 +294,13 @@ describe('review engine', () => {
     expect(r.verdict).toBe('correct');
   });
 });
+
+describe('/review command', () => {
+  it('is a built-in slash command that asks for the code_review tool', async () => {
+    expect(env.rt.commands().find((c) => c.name === 'review')).toMatchObject({ source: 'command' });
+    const input = await env.rt.expandInput('/review #42');
+    expect(JSON.stringify(input)).toContain('code_review');
+    expect(JSON.stringify(input)).toContain('#42');
+    expect(env.rt.tools.get('code_review')?.toolset).toBe('review');
+  });
+});

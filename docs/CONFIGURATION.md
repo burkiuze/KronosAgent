@@ -96,6 +96,7 @@ tool list entirely.
 | `terminal.timeoutSec` | `180` | Default command timeout (background processes are exempt). |
 | `terminal.docker` | `{image: node:22-bookworm, workdir: /workspace, extraArgs: [], network: true}` | Docker backend settings. |
 | `terminal.ssh` | `{host: ""}` | `host`, `user`, `port`, `key`, `workdir`. |
+| `terminal.sandbox` | `{mode: off, network: true, writable: [], fallback: refuse}` | OS sandbox for the local backend: `mode` `workspace-write` (only the project and temp are writable) or `read-only`; `network: false` blocks connections; `writable` adds directories (e.g. `~/.cache`); `fallback: unsandboxed` runs commands anyway when no sandbox is available. Linux needs the helper (`npm run build:native`) or bubblewrap. |
 
 ## Safety
 
@@ -221,10 +222,26 @@ instructions. Project-specific skills, agents and commands live in `.kronos/skil
 | `github.reposDir` | `''` | Where repositories are cloned (default `<profile>/repos`). |
 | `github.shellAuth` | `true` | Authenticate `git` in the agent's shell for GitHub checkouts. |
 | `github.officialApp` | `{slug: '', clientId: ''}` | The public Kronos GitHub App behind **Connect GitHub** (device flow — only its public client id is needed). |
-| `github.bot` | `{enabled: true, trigger: '@kronos', allowed: [OWNER, MEMBER, COLLABORATOR], mode: yolo, model: null, maxMinutes: 30}` | Answering mentions in issues and pull requests (needs the Kronos GitHub App and `gateway.publicUrl`). |
+| `github.bot` | `{enabled: true, trigger: '@kronos', allowed: [OWNER, MEMBER, COLLABORATOR], mode: yolo, model: null, maxMinutes: 30, autoReview: false}` | Answering mentions in issues and pull requests (needs the Kronos GitHub App and `gateway.publicUrl`). `autoReview` reviews every new pull request. |
 
 The Kronos GitHub App's credentials live in `<profile>/github-app.json` (mode 600). See
 [GITHUB.md](GITHUB.md).
+
+## Code review
+
+| Key | Default | Description |
+|---|---|---|
+| `review.model` / `review.verifyModel` | `null` | Models for the reviewers and the fact-checker (default: the default model). |
+| `review.verify` | `true` | Try to refute every finding against the code and drop the disproved ones. |
+| `review.minSeverity` / `review.minConfidence` | `low` / `0.3` | Findings below these are not reported. |
+| `review.maxFilesPerGroup` / `review.maxGroupLines` | `8` / `1500` | Size of the groups one reviewer handles. |
+| `review.maxFileLines` | `3000` | Larger files are listed but not reviewed. |
+| `review.concurrency` | `3` | Reviewers running at once. |
+| `review.planThreshold` | `300` | Groups with more changed lines first get a short risk plan. |
+| `review.maxIterations` | `40` | Tool-call budget of each reviewer. |
+| `review.include` / `review.exclude` | `[]` | Globs to limit or skip reviewed paths. |
+
+See [REVIEW.md](REVIEW.md).
 
 ## Environment variables
 

@@ -35,6 +35,16 @@ clear safety story. Kronos's defaults are conservative; every relaxation is expl
 - `safety.workspaceOnly: true` refuses writes outside the workspace.
 
 ### Isolation
+- **OS sandbox** (`terminal.sandbox.mode: workspace-write` or `read-only`) confines commands on
+  the local backend without Docker: Landlock on Linux (the Rust helper in `native/sandbox`, or
+  bubblewrap) and Seatbelt on macOS. Everything stays readable; writes are limited to the
+  project (its git top level), temp directories and `terminal.sandbox.writable`;
+  `terminal.sandbox.network: false` also blocks network connections. Background processes are
+  confined too. If no sandbox is available, commands are refused (`fallback: refuse`, the
+  default) rather than silently run unconfined. File tools (`write_file`, …) run in Kronos itself;
+  restrict them with `safety.workspaceOnly`.
+- **Stale-write guard:** `write_file` refuses to replace a file the agent has not read, or one
+  that changed on disk since it read it, until it is asked a second time.
 - `terminal.backend: docker` runs every command in a container with only the workspace mounted
   (optionally without network: `terminal.docker.network: false`). `ssh` runs them on another
   machine. Subagents inherit the parent's backend and permission policy.

@@ -7,7 +7,7 @@
 **One self-improving agent for your terminal, your desktop and every chat app you use.**
 It codes, researches, automates and remembers — with any model, on your machine.
 
-[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [GitHub](docs/GITHUB.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Research](docs/RESEARCH.md) · [Türkçe](#türkçe)
+[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [GitHub](docs/GITHUB.md) · [Code review](docs/REVIEW.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Research](docs/RESEARCH.md) · [Türkçe](#türkçe)
 
 <img src="docs/assets/chat-dark.png" alt="Kronos desktop: chat with tool calls, live plan and the files panel" width="900" />
 
@@ -93,6 +93,13 @@ cheaper model for subagents.
 requests; reads issues, reviews and CI; and with the app installed, answers `@kronos` in issues
 and pull requests — with a pull request when it changed code. [Setup guide](docs/GITHUB.md).
 
+**Code review you can trust.** `kronos review`, `/review` in a chat or `@kronos review` on a pull
+request: parallel read-only reviewers go through every changed file with its context, per-language
+defect checklists and your project's rules; each finding is pinned to the code it quotes and then
+**fact-checked by a second pass that tries to refute it**. Lock, generated and secret files never
+reach the model. Results as inline pull request comments with one-click suggestions, Markdown,
+JSON or SARIF, with `--fail-on high` for CI. [How it works](docs/REVIEW.md).
+
 A **repository map** (`repo_map`) shows the agent where everything lives in one call — files
 ranked by how much other code depends on them, with every class, function and method signature.
 
@@ -149,8 +156,10 @@ every failed call comes back with the expected arguments and an example.
 Permission modes (**Ask**, **Auto-edit**, **YOLO**, **Plan**), allow/deny rules such as
 `shell(git *)`, dangerous-command detection that always asks, protected paths, secret redaction,
 **file checkpoints with undo/retry**, lifecycle **hooks** (pre/post tool, prompt submit, session
-start, stop), Docker or SSH terminal backends, a loopback-only gateway with token auth, and
-pairing/allow-lists for chat users. Details in [docs/SECURITY.md](docs/SECURITY.md).
+start, stop), an **OS sandbox for local commands** like Codex's (Landlock through a tiny
+dependency-free Rust helper on Linux, Seatbelt on macOS — writes only to the project, optionally
+no network, no Docker needed), a stale-write guard, Docker or SSH terminal backends, a
+loopback-only gateway with token auth, and pairing/allow-lists for chat users. Details in [docs/SECURITY.md](docs/SECURITY.md).
 
 ### Bring your history with you
 `kronos import hermes|openclaw|claude|codex|cursor` copies memories, skills, instructions and
@@ -179,6 +188,7 @@ kronos -c                                    # continue the last CLI session
 kronos model list | set openrouter:qwen/qwen3-coder
 kronos keys set ANTHROPIC_API_KEY
 kronos skills list | install <git-url> | create | history <name> | rollback <name> | prune
+kronos review --base main                     # parallel, fact-checked code review (--pr 42 --post for GitHub)
 kronos eval examples/evals/coding.yaml --repeats 3 --model sonnet,ollama:qwen2.5-coder:7b   # benchmark
 kronos cron add "every monday at 9am" "Draft the weekly status report" --deliver telegram:<chat>
 kronos mcp add github -- npx -y @modelcontextprotocol/server-github
@@ -199,6 +209,7 @@ packages/gateway   @kronos/gateway  HTTP/WebSocket API, PTY terminal, OpenAI API
 packages/cli       kronos-agent     the `kronos` command: REPL, subcommands, setup, importers
 apps/web           @kronos/web      React UI served by the gateway
 apps/desktop       @kronos/desktop  Electron shell: embedded gateway, tray, shortcuts, updates
+native/sandbox     kronos-sandbox   Rust (std only) Landlock sandbox helper for local commands
 skills/                             bundled skills (SKILL.md)
 docs/                               analysis, architecture, configuration, messaging, security, performance, research
 ```
@@ -208,6 +219,7 @@ npm run build        # packages + web UI
 npm test             # unit + integration tests (vitest)
 npm run test:e2e     # drives the real UI in Chromium (needs playwright)
 npm run bench        # CPU / memory of the UI and gateway (see docs/PERFORMANCE.md)
+npm run build:native # the Linux sandbox helper (needs cargo; optional)
 npm run typecheck
 ```
 
@@ -273,6 +285,13 @@ bir modelle asla yanıtlanmaz). Arayüz İngilizcedir; Kronos ise sana senin dil
   kuralları, tehlikeli komut tespiti, korunan yollar, gizli bilgi maskeleme, dosya kontrol
   noktaları ile geri alma, kancalar (hooks), Docker/SSH terminali, yalnızca yerel ağda ve token
   ile korunan geçit, sohbet kullanıcıları için eşleştirme kodları.
+- **Kod incelemesi**: `kronos review`, sohbette `/review` ya da PR'da `@kronos review` —
+  paralel salt-okunur inceleyiciler, dil bazlı hata kontrol listeleri, proje kuralları, her
+  bulguyu kodla çürütmeye çalışan ikinci bir doğrulama turu; satır içi PR yorumları ve tek tıkla
+  uygulanan öneriler, SARIF/JSON çıktı ve CI için `--fail-on`.
+- **İşletim sistemi sandbox'ı**: Codex'teki gibi yerel komutları Docker olmadan kısıtlar —
+  Linux'ta küçük, bağımlılıksız bir Rust yardımcısıyla Landlock, macOS'ta Seatbelt; yazma yalnızca
+  projeye, istenirse ağ kapalı.
 - **Taşıma**: `kronos import hermes|openclaw|claude|codex|cursor` ile diğer ajanlardaki hafıza,
   yetenek ve MCP ayarlarını içe aktarın.
 

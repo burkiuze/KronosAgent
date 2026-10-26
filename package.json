@@ -20,6 +20,7 @@
     "build:packages": "tsc -b packages/core packages/gateway packages/cli",
     "build:web": "npm run build -w @kronos/web",
     "build:desktop": "npm run build -w @kronos/desktop",
+    "build:native": "cargo build --release --manifest-path native/sandbox/Cargo.toml",
     "dev:web": "npm run dev -w @kronos/web",
     "typecheck": "tsc -b packages/core packages/gateway packages/cli && npm run typecheck -w @kronos/web",
     "test": "vitest run",

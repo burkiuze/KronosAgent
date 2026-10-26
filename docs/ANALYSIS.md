@@ -60,8 +60,12 @@ Open-source terminal coding agent (Rust) plus cloud tasks and IDE extension.
 **Best at:** OS-level sandboxing of commands (Seatbelt on macOS, Landlock/seccomp on Linux),
 clear approval modes, `AGENTS.md`, fast local execution.
 **Limits:** coding-only scope; OpenAI-first.
-**Kronos adopts:** `AGENTS.md`, approval-mode ergonomics, and sandboxing via **Docker/SSH
-backends**. *Codex still leads* on kernel-level sandboxing of the local backend (on our roadmap).
+**Kronos adopts:** `AGENTS.md`, approval-mode ergonomics, its review rubric (discrete,
+actionable, introduced-by-this-change findings with a priority and an overall verdict) and its
+**kernel-level sandbox**: `terminal.sandbox` confines local commands with Landlock (Linux, through
+the dependency-free Rust helper `native/sandbox`, ~300 KB) or Seatbelt (macOS) — writes only to
+the project and temp, optionally no network — without Docker's daemon and memory. See
+[the Codex comparison](#codex-open-code-review-and-hermes-in-depth).
 
 ### Gemini CLI (Google)
 Open-source terminal agent with very large context windows, Google Search grounding, MCP,
@@ -140,6 +144,8 @@ Based on public docs as of Oct 2026; corrections welcome.
 | Voice in/out, image generation | ✅ | ✅ | ✅ | — | — | — | — | — | ◐ | ◐ |
 | Profiles (isolated personas) | ✅ | ✅ | ◐ | — | ◐ | — | — | — | — | — |
 | Import from other agents | ✅ | ✅ | — | — | — | — | — | — | — | — |
+| Code review with inline PR comments | ✅ | ◐ | — | ✅ | ✅ | ◐ | ◐ | ◐ | — | — |
+| Kernel sandbox for local commands | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — |
 | Works fully offline (local model) | ✅ | ◐ | ◐ | — | — | — | ◐ | ◐ | ◐ | ◐ |
 
 ## Design principles we derived
@@ -165,8 +171,9 @@ Based on public docs as of Oct 2026; corrections welcome.
 
 Honest list of places where others are ahead today, and what we plan:
 
-- **Kernel-level sandbox for the local backend** (Seatbelt/Landlock like Codex) — today use the
-  Docker or SSH backend for isolation.
+- **Windows sandbox** for the local backend (Codex has one) — today use the Docker backend there.
+- **Approval escalation from inside the sandbox** (re-run a denied command unsandboxed after one
+  click, as Codex does) — today the denial is reported and the user changes the mode.
 - **Serverless sandboxes** (Modal, Daytona, E2B) as terminal backends, as Hermes offers.
 - **Mobile companion apps / voice wake word** (OpenClaw) — today use any chat app plus voice
   memos, or the web UI on your phone.
@@ -177,3 +184,60 @@ Honest list of places where others are ahead today, and what we plan:
 - **iMessage** and **email inbound** channels.
 - **Skill marketplace** with signing and review, learning from the malicious-skill incidents in
   other ecosystems.
+
+## Codex, open-code-review and Hermes in depth
+
+We read the source of three agents closely — OpenAI's Codex (Rust), Alibaba's open-code-review
+(Go) and Nous Research's Hermes Agent (Python) — and took what makes each one good.
+
+### Code review: open-code-review and Codex `/review` vs `kronos review`
+
+| | open-code-review | Codex `/review` | Kronos |
+|---|---|---|---|
+| What it reviews | diff vs a branch, commits | uncommitted, branch, commit | uncommitted (incl. new files), staged, branch (merge base), commit, patch file, **GitHub pull request** (throwaway worktree at the PR head) |
+| File selection | extension allow-list, excluded paths, token ceiling | — | lock/generated/vendored/binary/data files and **secret paths never reach the model**; oversized files listed with the reason |
+| Splitting work | LLM-chosen groups of ≤ 10 files | one agent | deterministic groups (tests travel with their code, same area together) — reproducible and free |
+| Reviewer | one agent per group, `code_comment` + `task_done` | one agent, JSON output | one **read-only agent per group in parallel** with `review_comment`/`review_done`, coverage enforced (every file must be reviewed), a risk plan for large groups, and a JSON fallback for models without tool calling |
+| Rules | 56 per-language documents, many of them style rules | AGENTS.md attribution | per-language **defect** checklists (bugs, security, concurrency, leaks — no style policing) + REVIEW.md, the review sections of AGENTS.md/CLAUDE.md and path-scoped `.kronos/review/*.md`, cited in findings |
+| Placing comments | `existing_code` matched in the hunk, then file, then other files, then an LLM | model's line numbers | quoted code matched ignoring indentation (diff first, nearest to the reported line), cross-file relocation on a unique hit, partial-path resolution, snapping onto the hunk |
+| False positives | "fact-checker" prompt removing only on grounds A/B, protected subjects | confidence score | a separate refutation pass with grounds A–D (code absent, a quoted line disproves it, untouched code, pure taste), **protected subjects** (security, concurrency, compatibility, reliability) only removable on A/B, severity can only go down; every dropped finding is kept with its reason (`--show-dropped`) |
+| Output | terminal, JSON, CI comments | TUI | text, Markdown, JSON, **SARIF 2.1.0**, GitHub review with one-click ```` ```suggestion ```` blocks; `--fail-on high` for CI |
+| GitHub | CI integrations | — | `@kronos review` on any pull request, or `github.bot.autoReview` for every new one |
+
+### Sandbox: Codex vs Kronos
+
+Codex sandboxes every command by default: Seatbelt on macOS, bubblewrap + seccomp (or legacy
+Landlock) on Linux, a restricted token on Windows, plus approval escalation. Kronos now has the
+same model for the local backend, opt-in so nothing breaks for existing users:
+
+- **Linux:** `native/sandbox` is a std-only Rust binary (no crates, builds offline in ~10 s,
+  ~300 KB). It applies a Landlock ruleset — the whole file system readable, writes only beneath
+  the project root (git top level), temp directories and `terminal.sandbox.writable` — sets
+  `no_new_privs` and `exec`s the shell. With `network: false` it denies TCP through Landlock
+  (kernel 6.7+) or moves the command into an empty user + network namespace. No root, no daemon,
+  nothing left behind. Without the helper, bubblewrap is used if installed.
+- **macOS:** `sandbox-exec` with a generated Seatbelt profile (`allow default`, `deny file-write*`
+  except the writable roots and terminal devices, `deny network-*` for IP when offline).
+- Background processes are sandboxed the same way; `kronos doctor` reports the engine; the agent's
+  system prompt says the commands are sandboxed so it does not fight the denials.
+
+Resource cost: one `exec` of a 300 KB static helper per command — microseconds and no resident
+memory — against Docker's daemon and a container per workspace.
+
+### Hermes Agent details we took
+
+- **Stale-write guard** (Hermes `file_state`): `write_file` will not replace a file this agent
+  never read, or one that changed on disk since it read it (the user, a formatter, another agent);
+  the warning is given once per file version so a deliberate overwrite still works.
+- **Throwaway worktrees** (Hermes `subagent_worktree`): pull request reviews run in a detached
+  `git worktree` at the PR head that is removed afterwards — the user's checkout is never touched.
+- Already present before this round: post-edit diagnostics (Hermes LSP lint delta → Kronos syntax
+  check after every edit), session search, skills with provenance, progressive disclosure of large
+  tool sets in lean mode.
+
+### Resource use
+
+Kronos keeps the "normal agent" footprint: a Node.js process (the gateway idles at a few tens of
+MB, see [PERFORMANCE.md](PERFORMANCE.md)); no GPU is used unless you run a local model yourself;
+review groups run with bounded concurrency (`review.concurrency`, default 3); shell progress and
+background process output are kept in fixed-size buffers; the sandbox adds no resident process.

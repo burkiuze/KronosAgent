@@ -1,0 +1,16 @@
+[package]
+name = "kronos-sandbox"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Runs a command confined to its workspace (Linux Landlock + network namespace) for the Kronos agent"
+publish = false
+
+# no dependencies: std only, so it builds offline in seconds and stays ~400 KB
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

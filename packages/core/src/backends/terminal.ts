@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { relative, isAbsolute } from 'node:path';
 import type { KronosConfig } from '../config/schema.js';
 import { defaultShell, killTree, runProcess, runShell, shellArgs, type RunOptions, type RunResult } from '../util/process.js';
+import { describeSandbox, wrapCommand, type SandboxConfig } from './sandbox.js';
 import { newId } from '../util/misc.js';
 import { stripAnsi } from '../util/text.js';
 
@@ -17,14 +18,31 @@ export interface ExecBackend {
   dispose?(): Promise<void>;
 }
 
+/** `shell -c command`, inside the OS sandbox when one is configured. */
+export function sandboxedShell(command: string, cwd: string, shell: string, sandbox?: SandboxConfig): { file: string; args: string[] } | { error: string } {
+  const args = shellArgs(shell, command);
+  if (!sandbox || sandbox.mode === 'off') return { file: shell, args };
+  const wrapped = wrapCommand(shell, args, cwd, sandbox);
+  if ('error' in wrapped) {
+    if (sandbox.fallback === 'unsandboxed') return { file: shell, args };
+    return { error: `Not run: the sandbox (terminal.sandbox.mode: ${sandbox.mode}) is not available — ${wrapped.error}. Or set terminal.sandbox.fallback to "unsandboxed".` };
+  }
+  return wrapped;
+}
+
 class LocalBackend implements ExecBackend {
   readonly name = 'local';
-  constructor(private shell?: string) {}
+  constructor(private shell?: string, private sandbox?: SandboxConfig) {}
   exec(command: string, opts: ExecOptions): Promise<RunResult> {
-    return runShell(command, { ...opts, shell: this.shell || defaultShell() });
+    const shell = this.shell || defaultShell();
+    if (!this.sandbox || this.sandbox.mode === 'off') return runShell(command, { ...opts, shell });
+    const cmd = sandboxedShell(command, opts.cwd, shell, this.sandbox);
+    if ('error' in cmd) return Promise.resolve({ stdout: '', stderr: cmd.error, output: cmd.error, exitCode: 126, signal: null, timedOut: false, aborted: false, durationMs: 0 });
+    return runProcess(cmd.file, cmd.args, opts);
   }
   describe(): string {
-    return `local (${this.shell || defaultShell()})`;
+    const sb = describeSandbox(this.sandbox);
+    return `local (${this.shell || defaultShell()})${sb ? `, ${sb}` : ''}`;
   }
 }
 
@@ -107,7 +125,7 @@ export function createBackend(cfg: KronosConfig['terminal'], workspace: string):
     case 'ssh':
       return new SshBackend(cfg.ssh);
     default:
-      return new LocalBackend(cfg.shell);
+      return new LocalBackend(cfg.shell, cfg.sandbox);
   }
 }
 
@@ -131,8 +149,10 @@ const MAX_BUFFER = 400_000;
 export class ProcessManager {
   private procs = new Map<string, { info: BackgroundProcess; child: ChildProcess; output: string; readOffset: number }>();
 
-  start(command: string, cwd: string, sessionId?: string, shell = defaultShell()): BackgroundProcess {
-    const child = spawn(shell, shellArgs(shell, command), {
+  start(command: string, cwd: string, sessionId?: string, shell = defaultShell(), sandbox?: SandboxConfig): BackgroundProcess {
+    const cmd = sandboxedShell(command, cwd, shell, sandbox);
+    if ('error' in cmd) throw new Error(cmd.error);
+    const child = spawn(cmd.file, cmd.args, {
       cwd,
       env: { ...process.env, KRONOS_AGENT: '1', FORCE_COLOR: '0' },
       detached: process.platform !== 'win32',
