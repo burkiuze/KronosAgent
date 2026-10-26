@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { detectSandbox, projectRoot, seatbeltProfile, writableRoots } from '@kronos/core';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { detectSandbox, hostAllowed, hostMatches, isPrivateAddress, projectRoot, seatbeltProfile, writableRoots } from '@kronos/core';
 import { makeRuntime, type TestEnv } from './helpers.js';
 
 const cfg = { mode: 'workspace-write' as const, network: true, writable: [], fallback: 'refuse' as const };
@@ -71,5 +73,46 @@ describe.skipIf(!linuxHelper)('sandboxed shell (Landlock helper)', () => {
     writeFileSync(join(outside, 'keep.txt'), 'untouched');
     expect((await run(`rm -f ${join(outside, 'keep.txt')}`)).exitCode).not.toBe(0);
     expect(existsSync(join(outside, 'keep.txt'))).toBe(true);
+  });
+});
+
+describe('network allowlist', () => {
+  it('matches domain patterns like Codex', () => {
+    expect(hostMatches('registry.npmjs.org', 'registry.npmjs.org')).toBe(true);
+    expect(hostMatches('api.github.com', '*.github.com')).toBe(true);
+    expect(hostMatches('github.com', '*.github.com')).toBe(false);
+    expect(hostMatches('github.com', '**.github.com')).toBe(true);
+    expect(hostMatches('evilgithub.com', '**.github.com')).toBe(false);
+    expect(hostMatches('anything.com', '*')).toBe(false);
+    expect(hostAllowed('pypi.org', { allow: ['**.pypi.org'], deny: ['pypi.org'] }).ok).toBe(false);
+    expect(['127.0.0.1', '10.1.2.3', '192.168.0.1', '172.20.0.1', '::1', 'fd00::1', '169.254.1.1'].every(isPrivateAddress)).toBe(true);
+    expect(isPrivateAddress('140.82.112.3')).toBe(false);
+  });
+});
+
+describe.skipIf(!linuxHelper || !(engine as { detail?: string }).detail?.includes('network rules'))('sandboxed network through the proxy', () => {
+  let env: TestEnv;
+  let server: Server;
+  let port = 0;
+  beforeEach(async () => {
+    server = createServer((_q, r) => r.end('hello from the allowed host'));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    port = (server.address() as AddressInfo).port;
+    env = await makeRuntime({ terminal: { sandbox: { mode: 'workspace-write', network: false, writable: [], fallback: 'refuse', allowDomains: ['127.0.0.1'] } } } as never);
+  });
+  afterEach(async () => {
+    server.close();
+    await env.cleanup();
+  });
+
+  it('lets commands reach allowed hosts only, and only through the proxy', async () => {
+    const run = (command: string) => env.rt.backend.exec(command, { cwd: env.workspace, timeoutMs: 20_000 });
+    expect(env.rt.backend.describe()).toMatch(/network only to 127\.0\.0\.1/);
+    expect((await run(`curl -s http://127.0.0.1:${port}/`)).output).toContain('hello from the allowed host');
+    const blocked = await run(`curl -s -i http://localhost:${port}/`);
+    expect(blocked.output).toMatch(/403[\s\S]*not on the network allowlist/);
+    // going around the proxy is not possible: only its port can be connected to
+    const direct = await run(`node -e "require('net').connect(${port}, '127.0.0.1').on('connect', () => console.log('connected')).on('error', e => console.log('blocked', e.code))"`);
+    expect(direct.output).toMatch(/blocked (EACCES|EPERM)/);
   });
 });

@@ -96,7 +96,7 @@ tool list entirely.
 | `terminal.timeoutSec` | `180` | Default command timeout (background processes are exempt). |
 | `terminal.docker` | `{image: node:22-bookworm, workdir: /workspace, extraArgs: [], network: true}` | Docker backend settings. |
 | `terminal.ssh` | `{host: ""}` | `host`, `user`, `port`, `key`, `workdir`. |
-| `terminal.sandbox` | `{mode: off, network: true, writable: [], fallback: refuse}` | OS sandbox for the local backend: `mode` `workspace-write` (only the project and temp are writable) or `read-only`; `network: false` blocks connections; `writable` adds directories (e.g. `~/.cache`); `fallback: unsandboxed` runs commands anyway when no sandbox is available. Linux needs the helper (`npm run build:native`) or bubblewrap. |
+| `terminal.sandbox` | `{mode: off, network: true, writable: [], fallback: refuse, allowDomains: []}` | OS sandbox for the local backend: `mode` `workspace-write` (only the project and temp are writable) or `read-only`; `network: false` blocks connections; `writable` adds directories (e.g. `~/.cache`); `fallback: unsandboxed` runs commands anyway when no sandbox is available. `allowDomains` (with `network: false`): hosts still reachable through Kronos's filtering proxy — `example.com`, `*.example.com` (subdomains), `**.example.com` (both); local and private addresses only when listed exactly. Linux needs the helper (`npm run build:native`) or bubblewrap (bubblewrap cannot do `allowDomains`). |
 
 ## Safety
 

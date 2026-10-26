@@ -7,7 +7,7 @@
 //! it starts, and end with it.
 //!
 //! Usage:
-//!   kronos-sandbox [--write DIR]... [--no-network] [--best-effort] -- COMMAND [ARGS]...
+//!   kronos-sandbox [--write DIR]... [--no-network | --allow-connect-port PORT] [--best-effort] -- COMMAND [ARGS]...
 //!   kronos-sandbox --probe          print what this kernel supports, as JSON
 //!
 //! Exit codes: the command's own, or 125 when the sandbox could not be set up (unless
@@ -35,6 +35,7 @@ mod linux {
     const SYS_LANDLOCK_RESTRICT_SELF: c_long = 446;
     const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
     const LANDLOCK_RULE_PATH_BENEATH: c_int = 1;
+    const LANDLOCK_RULE_NET_PORT: c_int = 2;
     const PR_SET_NO_NEW_PRIVS: c_int = 38;
     const CLONE_NEWUSER: c_int = 0x1000_0000;
     const CLONE_NEWNET: c_int = 0x4000_0000;
@@ -55,6 +56,12 @@ mod linux {
     struct RulesetAttr {
         handled_access_fs: u64,
         handled_access_net: u64,
+    }
+
+    #[repr(C)]
+    struct NetPortAttr {
+        allowed_access: u64,
+        port: u64,
     }
 
     #[repr(C, packed)]
@@ -113,11 +120,16 @@ mod linux {
         pub notes: Vec<String>,
     }
 
-    pub fn apply(writable: &[String], no_network: bool) -> Applied {
+    pub fn apply(writable: &[String], no_network: bool, allow_port: Option<u16>) -> Applied {
         let abi = abi();
         let mut out = Applied { fs: false, network: None, notes: Vec::new() };
         // network first: a new user namespace must be created before Landlock restricts us
         let net_by_landlock = no_network && abi >= 4;
+        if allow_port.is_some() && !net_by_landlock {
+            // an empty network namespace cannot reach the proxy on the host's loopback
+            out.notes.push("network through the proxy needs Landlock network rules (kernel 6.7+)".to_string());
+            return out;
+        }
         if no_network && !net_by_landlock {
             match isolate_network() {
                 Ok(()) => out.network = Some("namespace"),
@@ -148,6 +160,13 @@ mod linux {
         for dir in writable {
             if let Err(e) = add_path(ruleset, dir, all) {
                 out.notes.push(format!("{dir}: {e}"));
+            }
+        }
+        if let (true, Some(port)) = (net_by_landlock, allow_port) {
+            let attr = NetPortAttr { allowed_access: NET_CONNECT_TCP, port: port as u64 };
+            if unsafe { syscall(SYS_LANDLOCK_ADD_RULE, ruleset, LANDLOCK_RULE_NET_PORT, &attr as *const NetPortAttr, 0u32) } < 0 {
+                out.notes.push(format!("could not allow the proxy port: {}", io::Error::last_os_error()));
+                return out;
             }
         }
         if unsafe { prctl(PR_SET_NO_NEW_PRIVS, 1 as c_long, 0 as c_long, 0 as c_long, 0 as c_long) } != 0 {
@@ -208,6 +227,7 @@ fn main() {
     let mut writable: Vec<String> = Vec::new();
     let mut no_network = false;
     let mut best_effort = false;
+    let mut allow_port: Option<u16> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -218,6 +238,11 @@ fn main() {
                 }
             }
             "--no-network" => no_network = true,
+            "--allow-connect-port" => {
+                i += 1;
+                allow_port = args.get(i).and_then(|p| p.parse().ok());
+                no_network = true;
+            }
             "--best-effort" => best_effort = true,
             "--" => {
                 i += 1;
@@ -238,7 +263,7 @@ fn main() {
 
     #[cfg(target_os = "linux")]
     {
-        let applied = linux::apply(&writable, no_network);
+        let applied = linux::apply(&writable, no_network, allow_port);
         let complete = applied.fs && (!no_network || applied.network.is_some());
         if !complete {
             for n in &applied.notes {
@@ -251,7 +276,7 @@ fn main() {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (&writable, no_network);
+        let _ = (&writable, no_network, allow_port);
         if !best_effort {
             eprintln!("kronos-sandbox: only Linux is supported (macOS uses sandbox-exec)");
             exit(125);

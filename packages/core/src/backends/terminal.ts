@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { relative, isAbsolute } from 'node:path';
 import type { KronosConfig } from '../config/schema.js';
 import { defaultShell, killTree, runProcess, runShell, shellArgs, type RunOptions, type RunResult } from '../util/process.js';
-import { describeSandbox, wrapCommand, type SandboxConfig } from './sandbox.js';
+import { describeSandbox, ensureNetworkProxy, proxiedNetwork, runningNetworkProxy, wrapCommand, type SandboxConfig } from './sandbox.js';
 import { newId } from '../util/misc.js';
 import { stripAnsi } from '../util/text.js';
 
@@ -19,10 +19,10 @@ export interface ExecBackend {
 }
 
 /** `shell -c command`, inside the OS sandbox when one is configured. */
-export function sandboxedShell(command: string, cwd: string, shell: string, sandbox?: SandboxConfig): { file: string; args: string[] } | { error: string } {
+export function sandboxedShell(command: string, cwd: string, shell: string, sandbox?: SandboxConfig): { file: string; args: string[]; env?: Record<string, string> } | { error: string } {
   const args = shellArgs(shell, command);
   if (!sandbox || sandbox.mode === 'off') return { file: shell, args };
-  const wrapped = wrapCommand(shell, args, cwd, sandbox);
+  const wrapped = wrapCommand(shell, args, cwd, sandbox, runningNetworkProxy()?.port);
   if ('error' in wrapped) {
     if (sandbox.fallback === 'unsandboxed') return { file: shell, args };
     return { error: `Not run: the sandbox (terminal.sandbox.mode: ${sandbox.mode}) is not available — ${wrapped.error}. Or set terminal.sandbox.fallback to "unsandboxed".` };
@@ -36,9 +36,13 @@ class LocalBackend implements ExecBackend {
   exec(command: string, opts: ExecOptions): Promise<RunResult> {
     const shell = this.shell || defaultShell();
     if (!this.sandbox || this.sandbox.mode === 'off') return runShell(command, { ...opts, shell });
-    const cmd = sandboxedShell(command, opts.cwd, shell, this.sandbox);
-    if ('error' in cmd) return Promise.resolve({ stdout: '', stderr: cmd.error, output: cmd.error, exitCode: 126, signal: null, timedOut: false, aborted: false, durationMs: 0 });
-    return runProcess(cmd.file, cmd.args, opts);
+    const sandbox = this.sandbox;
+    return (async () => {
+      if (proxiedNetwork(sandbox)) await ensureNetworkProxy(sandbox);
+      const cmd = sandboxedShell(command, opts.cwd, shell, sandbox);
+      if ('error' in cmd) return { stdout: '', stderr: cmd.error, output: cmd.error, exitCode: 126, signal: null, timedOut: false, aborted: false, durationMs: 0 };
+      return runProcess(cmd.file, cmd.args, { ...opts, env: { ...opts.env, ...cmd.env } });
+    })();
   }
   describe(): string {
     const sb = describeSandbox(this.sandbox);
@@ -154,7 +158,7 @@ export class ProcessManager {
     if ('error' in cmd) throw new Error(cmd.error);
     const child = spawn(cmd.file, cmd.args, {
       cwd,
-      env: { ...process.env, KRONOS_AGENT: '1', FORCE_COLOR: '0' },
+      env: { ...process.env, KRONOS_AGENT: '1', FORCE_COLOR: '0', ...cmd.env },
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     });

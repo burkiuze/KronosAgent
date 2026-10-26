@@ -32,7 +32,7 @@ import { HookRunner } from './agent/hooks.js';
 import { CronScheduler, type CronJob } from './cron/scheduler.js';
 import { McpManager } from './mcp/manager.js';
 import { createBackend, ProcessManager, type ExecBackend } from './backends/terminal.js';
-import { detectSandbox } from './backends/sandbox.js';
+import { detectSandbox, ensureNetworkProxy, proxiedNetwork } from './backends/sandbox.js';
 import { Agent, type AgentOptions } from './agent/agent.js';
 import { loadAgentDefinitions, type AgentDefinition } from './agent/definitions.js';
 import { sendPlatformMessage, type PlatformId } from './messaging/senders.js';
@@ -153,6 +153,7 @@ export class Kronos {
     k.checkpoints = new CheckpointManager(k.paths.checkpoints);
     k.hooks = new HookRunner(k.config.hooks);
     k.backend = createBackend(k.config.terminal, k.workspace());
+    if (proxiedNetwork(k.config.terminal.sandbox)) void ensureNetworkProxy(k.config.terminal.sandbox).catch((e) => log.warn('network proxy failed to start', e));
     k.mcp = new McpManager(k.tools);
     k.github = new GitHubService(k);
     k.review = new ReviewEngine(k);

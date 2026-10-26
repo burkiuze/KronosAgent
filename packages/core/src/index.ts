@@ -61,5 +61,6 @@ export * from './review/index.js';
 export { SessionRecaps, recapTranscript } from './memory/recaps.js';
 export { parseStructured } from './runtime.js';
 export { validateValue } from './util/schema.js';
+export { hostMatches, hostAllowed, isPrivateAddress, NetworkProxy } from './backends/netproxy.js';
 export { detectSandbox, wrapCommand, writableRoots, seatbeltProfile, describeSandbox, projectRoot, type SandboxConfig } from './backends/sandbox.js';
 export { GitHubService, GitHubError, parseGitHubRemote, type GitHubAppCredentials, type GitHubRepo, type GitHubStatus } from './github/github.js';

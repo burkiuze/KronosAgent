@@ -4,6 +4,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { expandHome, kronosHome } from '../config/paths.js';
+import { NetworkProxy, type DomainPolicy } from './netproxy.js';
 
 /**
  * OS-level sandbox for commands on the local backend — the lightweight alternative to the Docker
@@ -19,6 +20,11 @@ export interface SandboxConfig {
   network: boolean;
   /** extra writable directories (~ allowed) */
   writable: string[];
+  /**
+   * with network off: hosts still reachable through Kronos's filtering proxy ("registry.npmjs.org",
+   * "**.github.com", …); empty = no network at all
+   */
+  allowDomains?: string[];
   /** when no sandbox is available: refuse to run commands, or run them unsandboxed */
   fallback: 'refuse' | 'unsandboxed';
 }
@@ -29,6 +35,33 @@ export interface WrappedCommand {
   file: string;
   args: string[];
   engine: SandboxEngine;
+  /** environment the command needs (proxy settings) */
+  env?: Record<string, string>;
+}
+
+let proxy: NetworkProxy | undefined;
+let proxyReady: Promise<number> | undefined;
+let proxyPolicy: DomainPolicy = { allow: [] };
+
+/** Network through the allowlist proxy: network off, but some domains allowed. */
+export function proxiedNetwork(cfg: SandboxConfig | undefined): boolean {
+  return Boolean(cfg && cfg.mode !== 'off' && !cfg.network && cfg.allowDomains?.length);
+}
+
+/** Start (once) the filtering proxy for sandboxed commands; the policy follows the latest config. */
+export async function ensureNetworkProxy(cfg: SandboxConfig): Promise<NetworkProxy> {
+  proxyPolicy = { allow: cfg.allowDomains ?? [] };
+  if (!proxy) {
+    proxy = new NetworkProxy(() => proxyPolicy);
+    proxyReady = proxy.start();
+  }
+  await proxyReady;
+  return proxy;
+}
+
+/** The running proxy, if it has started. */
+export function runningNetworkProxy(): NetworkProxy | undefined {
+  return proxy && proxy.port ? proxy : undefined;
 }
 
 function executable(p: string): boolean {
@@ -130,13 +163,14 @@ export function writableRoots(cwd: string, cfg: SandboxConfig): string[] {
 }
 
 /** Seatbelt profile: everything allowed except writes outside `writable` (and the network, if off). */
-export function seatbeltProfile(writable: string[], network: boolean): string {
+export function seatbeltProfile(writable: string[], network: boolean, proxyPort?: number): string {
   return [
     '(version 1)',
     '(allow default)',
     '(deny file-write*)',
     `(allow file-write* ${writable.map((_, i) => `(subpath (param "W${i}"))`).join(' ')} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/") (regex #"^/dev/ptmx") (regex #"^/dev/ttys"))`,
     ...(network ? [] : ['(deny network-outbound (remote ip))', '(deny network-bind (local ip))']),
+    ...(!network && proxyPort ? [`(allow network-outbound (remote ip "localhost:${proxyPort}"))`] : []),
   ].join('\n');
 }
 
@@ -144,14 +178,23 @@ export function seatbeltProfile(writable: string[], network: boolean): string {
  * Prefix `file args` (usually `bash -c "<command>"`) with the sandbox. Returns an error when the
  * sandbox is on but unavailable (the caller refuses or falls back per `fallback`).
  */
-export function wrapCommand(file: string, args: string[], cwd: string, cfg: SandboxConfig): WrappedCommand | { error: string } {
+export function wrapCommand(file: string, args: string[], cwd: string, cfg: SandboxConfig, proxyPort?: number): WrappedCommand | { error: string } {
   const engine = detectSandbox();
   if ('error' in engine) return engine;
   const writable = writableRoots(cwd, cfg);
+  const proxied = proxiedNetwork(cfg);
+  if (proxied && !proxyPort) return { error: 'the network proxy is not running' };
+  const env = proxied && proxyPort ? { HTTP_PROXY: `http://127.0.0.1:${proxyPort}`, HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`, http_proxy: `http://127.0.0.1:${proxyPort}`, https_proxy: `http://127.0.0.1:${proxyPort}`, ALL_PROXY: `http://127.0.0.1:${proxyPort}`, all_proxy: `http://127.0.0.1:${proxyPort}`, NO_PROXY: '', no_proxy: '' } : undefined;
   switch (engine.engine) {
     case 'kronos-sandbox':
-      return { engine: 'kronos-sandbox', file: engine.path, args: [...writable.flatMap((w) => ['--write', w]), ...(cfg.network ? [] : ['--no-network']), '--', file, ...args] };
+      return {
+        engine: 'kronos-sandbox',
+        file: engine.path,
+        args: [...writable.flatMap((w) => ['--write', w]), ...(cfg.network ? [] : proxied ? ['--allow-connect-port', String(proxyPort)] : ['--no-network']), '--', file, ...args],
+        env,
+      };
     case 'bwrap':
+      if (proxied) return { error: 'bubblewrap cannot reach the network proxy from its isolated network; build the kronos-sandbox helper for terminal.sandbox.allowDomains' };
       return {
         engine: 'bwrap',
         file: engine.path,
@@ -168,7 +211,7 @@ export function wrapCommand(file: string, args: string[], cwd: string, cfg: Sand
         ],
       };
     case 'seatbelt':
-      return { engine: 'seatbelt', file: engine.path, args: ['-p', seatbeltProfile(writable, cfg.network), ...writable.flatMap((w, i) => ['-D', `W${i}=${w}`]), '--', file, ...args] };
+      return { engine: 'seatbelt', file: engine.path, args: ['-p', seatbeltProfile(writable, cfg.network, proxied ? proxyPort : undefined), ...writable.flatMap((w, i) => ['-D', `W${i}=${w}`]), '--', file, ...args], env };
   }
 }
 
@@ -177,5 +220,6 @@ export function describeSandbox(cfg: SandboxConfig | undefined): string {
   if (!cfg || cfg.mode === 'off') return '';
   const engine = detectSandbox();
   if ('error' in engine) return `sandbox ${cfg.mode} requested but unavailable — ${cfg.fallback === 'unsandboxed' ? 'commands run unsandboxed' : 'commands are refused'}`;
-  return `sandboxed (${engine.detail}): ${cfg.mode === 'read-only' ? 'read-only except temp' : 'writes limited to the project and temp'}${cfg.network ? '' : ', no network'}`;
+  const net = cfg.network ? '' : proxiedNetwork(cfg) ? `, network only to ${cfg.allowDomains!.join(', ')} (through a proxy; set HTTPS_PROXY-aware tools)` : ', no network';
+  return `sandboxed (${engine.detail}): ${cfg.mode === 'read-only' ? 'read-only except temp' : 'writes limited to the project and temp'}${net}`;
 }

@@ -39,7 +39,11 @@ clear safety story. Kronos's defaults are conservative; every relaxation is expl
   the local backend without Docker: Landlock on Linux (the Rust helper in `native/sandbox`, or
   bubblewrap) and Seatbelt on macOS. Everything stays readable; writes are limited to the
   project (its git top level), temp directories and `terminal.sandbox.writable`;
-  `terminal.sandbox.network: false` also blocks network connections. Background processes are
+  `terminal.sandbox.network: false` also blocks network connections; with
+  `terminal.sandbox.allowDomains` the only way out is Kronos's local proxy, which admits listed
+  hosts (HTTPS tunnels, not intercepted) and refuses everything else, including hostnames that
+  resolve to private addresses. Landlock lets sandboxed processes connect to the proxy's port
+  only. Background processes are
   confined too. If no sandbox is available, commands are refused (`fallback: refuse`, the
   default) rather than silently run unconfined. File tools (`write_file`, …) run in Kronos itself;
   restrict them with `safety.workspaceOnly`.
