@@ -112,6 +112,23 @@ export interface DelegateResult {
   usage: Usage;
 }
 
+export interface BackgroundAgent {
+  id: string;
+  label: string;
+  sessionId: string;
+  status: 'running' | 'done' | 'failed' | 'stopped';
+  startedAt: number;
+  finishedAt?: number;
+  /** final report of the latest task */
+  result?: string;
+  error?: string;
+  /** results already handed to the parent */
+  reported: boolean;
+  child: Agent;
+  done: Promise<void>;
+  controller: AbortController;
+}
+
 function textOf(parts: Part[]): string {
   return parts
     .filter((p): p is TextPart => p.type === 'text')
@@ -139,6 +156,9 @@ export class Agent {
   private pendingPermissions = new Map<string, (d: PermissionDecision) => void>();
   private pendingClarify = new Map<string, (a: string) => void>();
   private readFiles = new Set<string>();
+  /** subagents started with agents(action: spawn), running while this agent keeps working */
+  private bgAgents = new Map<string, BackgroundAgent>();
+  private bgNudged = false;
   /** mtime/size of each file as this agent last read or wrote it (stale-write guard) */
   private fileStamps = new Map<string, { mtimeMs: number; size: number }>();
   private staleWarned = new Set<string>();
@@ -238,7 +258,7 @@ export class Agent {
     const only = this.opts.toolFilter?.only;
     const exclude = [...(this.opts.toolFilter?.exclude ?? [])];
     if (this.depth > 0) exclude.push('ask_user', 'exit_plan_mode');
-    if (this.depth >= cfg.agent.subagents.maxDepth) exclude.push('delegate');
+    if (this.depth >= cfg.agent.subagents.maxDepth) exclude.push('delegate', 'agents');
     if (!this.opts.team) exclude.push('team_board');
     const deferred = new Set(deferredTools(this.rt, lean && !only).map((t) => t.name));
     const loaded = new Set(Array.isArray(this.session.meta?.loadedTools) ? (this.session.meta.loadedTools as string[]) : []);
@@ -459,6 +479,11 @@ export class Agent {
   private async askPermission(req: Omit<PermissionRequest, 'requestId' | 'sessionId'>): Promise<PermissionDecision> {
     let request: PermissionRequest = { ...req, requestId: newId('perm_'), sessionId: this.session.id };
     const unattended = !this.opts.onPermission;
+    if (this.rt.hooks.has('permissionRequest')) {
+      const h = await this.rt.hooks.run('permissionRequest', { sessionId: this.session.id, toolName: req.toolName, input: req.input, reason: req.reason, dangerous: Boolean(req.dangerous), mode: this.mode }, { toolName: req.toolName, cwd: this.session.cwd });
+      if (h.blocked) return { decision: 'deny', feedback: `Refused by a permissionRequest hook: ${h.reason}` };
+      if (h.allow) return { decision: 'allow' };
+    }
     const guardian = this.rt.config.safety.guardian?.mode ?? 'off';
     if (guardian === 'always' || (guardian === 'unattended' && unattended && this.opts.autoApprove)) {
       try {
@@ -566,6 +591,7 @@ export class Agent {
 
     this.editsSinceVerify = 0;
     this.verifyNudged = false;
+    this.bgNudged = false;
     this.replyNudges = { empty: 0, intent: 0 };
     this.lastVerify = undefined;
     this.runSkills.clear();
@@ -757,6 +783,12 @@ export class Agent {
           const nudge = res.stopReason === 'end_turn' && iter < maxIter && this.tools.length ? this.replyNudge(textOf(res.parts)) : undefined;
           if (nudge) {
             this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: nudge }], createdAt: Date.now(), meta: { kind: 'note' } }]);
+            continue;
+          }
+          const pendingAgents = [...this.bgAgents.values()].filter((a) => a.status === 'running' || !a.reported);
+          if (res.stopReason === 'end_turn' && iter < maxIter && pendingAgents.length && !this.bgNudged) {
+            this.bgNudged = true;
+            this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: `Background agents ${pendingAgents.map((a) => `${a.id} (${a.label}, ${a.status})`).join(', ')} have results you have not collected. Call agents(action: "wait") to get them (or "stop" those you no longer need) before your final answer.` }], createdAt: Date.now(), meta: { kind: 'note' } }]);
             continue;
           }
           if (res.stopReason !== 'max_tokens' && iter < maxIter && this.shouldVerifyBeforeFinish()) {
@@ -1221,6 +1253,10 @@ export class Agent {
       'Write a dense, structured summary with these sections: ## Goal (the user\'s overall objective and constraints), ## Progress (what has been done, ' +
       'decisions made and why), ## Key facts (file paths, commands, URLs, identifiers, errors and their fixes, user preferences), ## Current state ' +
       '(what is in progress, open problems), ## Next steps. Preserve exact names, paths and values. Do not invent anything.';
+    if (this.rt.hooks.has('preCompact')) {
+      const h = await this.rt.hooks.run('preCompact', { sessionId: this.session.id, messages: head.length, focus: focus ?? '' }, { cwd: this.session.cwd });
+      if (h.context) focus = [focus, h.context].filter(Boolean).join('\n');
+    }
     const chunks = this.transcriptChunks(head, 100_000);
     let summary = '';
     for (const [i, chunk] of chunks.entries()) {
@@ -1521,6 +1557,102 @@ export class Agent {
         this.rt.releaseAgent(session.id);
       }
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Background agents (Codex spawn_agent / wait_agent / send_input / close_agent)
+  // ---------------------------------------------------------------------------
+
+  /** Start a subagent that works in the background; returns at once. */
+  spawnAgent(t: DelegateTask & { context?: string }): BackgroundAgent {
+    const cfg = this.rt.config.agent.subagents;
+    if (this.depth >= cfg.maxDepth) throw new Error(`Maximum delegation depth (${cfg.maxDepth}) reached — do this work yourself.`);
+    const running = [...this.bgAgents.values()].filter((a) => a.status === 'running').length;
+    if (running >= Math.max(1, cfg.maxConcurrent)) throw new Error(`${running} background agents are already running (agent.subagents.maxConcurrent); wait for one or stop one first.`);
+    const defs = this.rt.agentDefinitions(this.session.cwd);
+    const def = defs.find((d) => d.name === (t.agent ?? 'general')) ?? defs.find((d) => d.name === 'general');
+    const id = `a${this.bgAgents.size + 1}`;
+    const label = t.label?.trim() || `${def?.name ?? 'agent'} ${id}`;
+    const modelRef = t.model ?? def?.model ?? this.rt.config.model.subagent ?? (this.session.model || undefined);
+    const session = this.rt.sessions.create({ title: `↳ ${label}`, parentId: this.session.id, cwd: this.session.cwd, source: 'subagent', profile: this.session.profile, model: this.rt.providers.resolve(modelRef).ref, mode: this.mode });
+    const only = t.toolsets?.length ? t.toolsets : def?.tools;
+    const child = this.rt.createAgent({
+      session,
+      surface: 'subagent',
+      depth: this.depth + 1,
+      definition: def,
+      subagentContext: t.context,
+      onPermission: this.opts.onPermission ? (req) => this.opts.onPermission!({ ...req, summary: `[${label}] ${req.summary}` }) : undefined,
+      autoApprove: this.opts.autoApprove,
+      toolFilter: only ? { only: [...only, 'todo_write', 'skill_view', 'skills_list', 'memory'] } : undefined,
+    });
+    const entry = { id, label, sessionId: session.id, status: 'running', startedAt: Date.now(), reported: false, child, controller: new AbortController() } as BackgroundAgent;
+    entry.done = this.runBackground(entry, t.task);
+    this.bgAgents.set(id, entry);
+    this.bgNudged = false;
+    return entry;
+  }
+
+  private runBackground(entry: BackgroundAgent, task: string): Promise<void> {
+    entry.status = 'running';
+    entry.reported = false;
+    this.emit({ type: 'subagent', runId: this.currentRunId, agentId: entry.sessionId, label: entry.label, status: 'start', detail: truncate(task, 200) });
+    const off = entry.child.events.on((e) => {
+      if (e.type === 'tool_call') this.emit({ type: 'subagent', runId: this.currentRunId, agentId: entry.sessionId, label: entry.label, status: 'running', detail: e.summary });
+    });
+    return entry.child
+      .run({ text: task }, { signal: entry.controller.signal, maxIterations: this.rt.config.agent.subagents.maxIterations })
+      .then((r) => {
+        const ok = r.stopReason !== 'error' && r.stopReason !== 'stalled' && r.stopReason !== 'interrupted';
+        entry.status = entry.status === 'stopped' ? 'stopped' : ok ? 'done' : 'failed';
+        entry.result = r.text;
+        entry.error = r.error;
+      })
+      .catch((e) => {
+        entry.status = 'failed';
+        entry.error = errorMessage(e);
+      })
+      .finally(() => {
+        entry.finishedAt = Date.now();
+        off();
+        this.emit({ type: 'subagent', runId: this.currentRunId, agentId: entry.sessionId, label: entry.label, status: entry.status === 'done' ? 'done' : 'error', detail: entry.error });
+      });
+  }
+
+  backgroundAgents(): BackgroundAgent[] {
+    return [...this.bgAgents.values()];
+  }
+
+  /** Wait until the given (default: all running) agents finish or `timeoutMs` passes. */
+  async waitAgents(ids: string[] | undefined, timeoutMs: number, signal?: AbortSignal): Promise<BackgroundAgent[]> {
+    const targets = (ids?.length ? ids.map((i) => this.bgAgents.get(i)).filter((a): a is BackgroundAgent => !!a) : [...this.bgAgents.values()].filter((a) => a.status === 'running' || !a.reported));
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<void>((r) => (timer = setTimeout(r, timeoutMs)));
+    const aborted = new Promise<void>((r) => signal?.addEventListener('abort', () => r(), { once: true }));
+    await Promise.race([Promise.all(targets.map((a) => a.done)), timeout, aborted]);
+    if (timer) clearTimeout(timer);
+    return targets;
+  }
+
+  /** Give a finished background agent a follow-up task (it keeps its context). */
+  sendToAgent(id: string, message: string): BackgroundAgent {
+    const a = this.bgAgents.get(id);
+    if (!a) throw new Error(`No background agent ${id}`);
+    if (a.status === 'running') throw new Error(`${id} is still working; wait for it first.`);
+    a.controller = new AbortController();
+    a.done = this.runBackground(a, message);
+    this.bgNudged = false;
+    return a;
+  }
+
+  stopAgent(id: string): boolean {
+    const a = this.bgAgents.get(id);
+    if (!a || a.status !== 'running') return false;
+    a.status = 'stopped';
+    a.reported = true;
+    a.controller.abort();
+    a.child.interrupt();
+    return true;
   }
 
   // ---------------------------------------------------------------------------

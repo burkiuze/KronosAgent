@@ -200,6 +200,10 @@ export interface KronosConfig {
     userPromptSubmit: HookConfig[];
     sessionStart: HookConfig[];
     stop: HookConfig[];
+    /** before asking for approval: stdout {"decision":"allow"} approves, exit 2 / {"decision":"deny"} refuses */
+    permissionRequest: HookConfig[];
+    /** before compaction: stdout is added to the summary instructions */
+    preCompact: HookConfig[];
   };
   cron: { enabled: boolean; timezone: string; maxConcurrent: number };
   ui: {
@@ -368,7 +372,7 @@ export function defaultConfig(): KronosConfig {
       homeassistant: { enabled: false, url: '', token: '${HASS_TOKEN}' },
     },
     mcp: { servers: {}, deferAfter: 30 },
-    hooks: { preToolUse: [], postToolUse: [], userPromptSubmit: [], sessionStart: [], stop: [] },
+    hooks: { preToolUse: [], postToolUse: [], userPromptSubmit: [], sessionStart: [], stop: [], permissionRequest: [], preCompact: [] },
     cron: { enabled: true, timezone: '', maxConcurrent: 2 },
     ui: {
       theme: 'kronos',

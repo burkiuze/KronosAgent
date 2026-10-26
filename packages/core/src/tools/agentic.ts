@@ -225,6 +225,73 @@ export const delegateTool: ToolDefinition<{
   },
 };
 
+export const agentsTool: ToolDefinition<{ action: 'spawn' | 'wait' | 'send' | 'list' | 'stop'; task?: string; label?: string; agent?: string; model?: string; context?: string; id?: string; ids?: string[]; message?: string; timeout?: number }> = {
+  name: 'agents',
+  toolset: 'delegate',
+  risk: 'read',
+  description:
+    'Background subagents that work while you keep going (unlike delegate, which waits). ' +
+    'spawn: start one with a complete, self-contained task (returns its id at once). ' +
+    'wait: block until the given ids (default: all) finish or timeout seconds pass, and get their reports. ' +
+    'send: give a finished agent a follow-up task (it keeps its context). list: status of all. stop: cancel one. ' +
+    'Collect every result with wait before your final answer.',
+  parameters: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['spawn', 'wait', 'send', 'list', 'stop'] },
+      task: { type: 'string', description: 'spawn: complete instructions (the agent cannot see this conversation).' },
+      label: { type: 'string', description: 'spawn: short name.' },
+      agent: { type: 'string', description: 'spawn: agent type (general, explorer, researcher, coder, reviewer, planner, …).' },
+      model: { type: 'string', description: 'spawn: optional model.' },
+      context: { type: 'string', description: 'spawn: shared background.' },
+      id: { type: 'string', description: 'send/stop: agent id (a1, a2, …).' },
+      ids: { type: 'array', items: { type: 'string' }, description: 'wait: agent ids (default: all unfinished or unread).' },
+      message: { type: 'string', description: 'send: the follow-up task.' },
+      timeout: { type: 'integer', description: 'wait: seconds (default 600).', minimum: 1, maximum: 3600 },
+    },
+    required: ['action'],
+  },
+  summarize: (i) => (i.action === 'spawn' ? `Start background agent: ${i.label ?? truncate(i.task ?? '', 40)}` : `Agents ${i.action}${i.id ? ` ${i.id}` : ''}`),
+  async execute(input, ctx) {
+    const a = ctx.agent;
+    const line = (b: ReturnType<typeof a.backgroundAgents>[number]) =>
+      `${b.id} ${b.label} — ${b.status}${b.finishedAt ? ` after ${formatDuration(b.finishedAt - b.startedAt)}` : ` for ${formatDuration(Date.now() - b.startedAt)}`} (session ${b.sessionId})`;
+    switch (input.action) {
+      case 'spawn': {
+        if (!input.task) return { content: 'task is required', isError: true };
+        const b = a.spawnAgent({ task: input.task, label: input.label, agent: input.agent, model: input.model, context: input.context });
+        return { content: `Started ${b.id} (${b.label}) in the background. Keep working; call agents(action:"wait") to collect its report.`, meta: { agentId: b.id, sessionId: b.sessionId } };
+      }
+      case 'list': {
+        const all = a.backgroundAgents();
+        return { content: all.length ? all.map(line).join('\n') : 'No background agents.' };
+      }
+      case 'stop':
+        if (!input.id) return { content: 'id is required', isError: true };
+        return { content: a.stopAgent(input.id) ? `Stopped ${input.id}.` : `${input.id} is not running.` };
+      case 'send': {
+        if (!input.id || !input.message) return { content: 'id and message are required', isError: true };
+        const b = a.sendToAgent(input.id, input.message);
+        return { content: `${b.id} is working on the follow-up. Call agents(action:"wait", ids:["${b.id}"]) for its report.` };
+      }
+      case 'wait': {
+        const list = await a.waitAgents(input.ids, (input.timeout ?? 600) * 1000, ctx.signal);
+        if (!list.length) return { content: 'No background agents to wait for.' };
+        const body = list
+          .map((b) => {
+            if (b.status === 'running') return `## ${b.id} ${b.label} — still running (${formatDuration(Date.now() - b.startedAt)}); wait again later`;
+            b.reported = true;
+            return `## ${b.id} ${b.label} — ${b.status}\n${b.result || b.error || '(no output)'}`;
+          })
+          .join('\n\n');
+        return { content: body, isError: list.every((b) => b.status === 'failed') };
+      }
+      default:
+        return { content: `Unknown action ${String(input.action)}`, isError: true };
+    }
+  },
+};
+
 export const teamBoardTool: ToolDefinition<{ action: 'read' | 'post' | 'add' | 'claim' | 'done'; text?: string; id?: string; note?: string; since?: number }> = {
   name: 'team_board',
   toolset: 'delegate',
@@ -657,6 +724,7 @@ export const agenticTools = [
   askUserTool,
   exitPlanModeTool,
   delegateTool,
+  agentsTool,
   teamBoardTool,
   skillsListTool,
   skillViewTool,

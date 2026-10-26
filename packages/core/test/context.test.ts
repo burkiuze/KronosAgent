@@ -285,3 +285,67 @@ describe('recaps of past work', () => {
     expect(env.rt.sessions.get(next.id)?.systemPrompt).toContain('2026-10-20-oauth-migration.md');
   });
 });
+
+describe('permissionRequest hook', () => {
+  it('can approve or refuse what would otherwise need a person', async () => {
+    let step = 0;
+    env.rt.updateConfig({ hooks: { permissionRequest: [{ matcher: 'shell', command: `node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.input.command.includes('deploy')){console.error('no deploys from automation');process.exit(2)}console.log(JSON.stringify({decision:'allow'}))})"` }] } } as never);
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        step++;
+        const call = (command: string): ChatResponse => ({ parts: [{ type: 'tool_call', id: `c${step}`, name: 'shell', input: { command } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' });
+        if (step === 1) return call('echo built > out.txt');
+        if (step === 2) return call('./deploy.sh');
+        return { parts: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    // Ask mode and nobody to ask: without the hook both commands would be refused
+    const r = await env.rt.runHeadless('build and deploy', { mode: 'ask', model: 'kronos:demo' });
+    const results = env.rt.sessions.messages(r.sessionId).flatMap((m) => m.parts).filter((p) => p.type === 'tool_result') as { content: string; isError?: boolean }[];
+    expect(results[0]?.isError).toBeFalsy();
+    expect(readFileSync(join(env.workspace, 'out.txt'), 'utf8')).toBe('built\n');
+    expect(results[1]?.content).toMatch(/Refused by a permissionRequest hook: no deploys from automation/);
+  });
+});
+
+describe('background agents', () => {
+  it('run while the parent keeps working, and their reports are collected with wait', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const order: string[] = [];
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        const sub = req.system.includes('You are a subagent');
+        const done = req.messages.flatMap((m) => m.parts).filter((p) => p.type === 'tool_result').length;
+        const call = (name: string, input: Record<string, unknown>): ChatResponse => ({ parts: [{ type: 'tool_call', id: `p${done}`, name, input } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' });
+        if (sub) {
+          await gate; // the subagent is slow
+          order.push('sub finished');
+          return { parts: [{ type: 'text', text: 'Found 3 TODOs in src/.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        }
+        if (done === 0) return call('agents', { action: 'spawn', task: 'Count TODOs in src/', label: 'todo counter' });
+        if (done === 1) {
+          order.push('parent kept working');
+          release();
+          return call('list_dir', { path: '.' });
+        }
+        // finishing without collecting the report gets a reminder first
+        const reminded = req.messages.some((m) => m.parts.some((p) => p.type === 'text' && p.text.includes('have results you have not collected')));
+        if (done === 2 && !reminded) return { parts: [{ type: 'text', text: 'All done.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        if (done === 2) return call('agents', { action: 'wait' });
+        return { parts: [{ type: 'text', text: 'The helper found 3 TODOs.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    const r = await env.rt.agent(s.id).run('count todos in the background and list files meanwhile');
+    expect(order).toEqual(['parent kept working', 'sub finished']);
+    expect(r.text).toBe('The helper found 3 TODOs.');
+    const results = env.rt.sessions.messages(s.id).flatMap((m) => m.parts).filter((p) => p.type === 'tool_result') as { toolName: string; content: string }[];
+    expect(results[0]?.content).toMatch(/^Started a1 \(todo counter\) in the background/);
+    expect(results.find((p) => p.toolName === 'agents' && p.content.includes('## a1'))?.content).toMatch(/## a1 todo counter — done\nFound 3 TODOs in src\//);
+  });
+});

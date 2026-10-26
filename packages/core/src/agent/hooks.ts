@@ -5,7 +5,7 @@ import { logger } from '../util/log.js';
 
 const log = logger('hooks');
 
-export type HookEvent = 'preToolUse' | 'postToolUse' | 'userPromptSubmit' | 'sessionStart' | 'stop';
+export type HookEvent = 'preToolUse' | 'postToolUse' | 'userPromptSubmit' | 'sessionStart' | 'stop' | 'permissionRequest' | 'preCompact';
 
 export interface HookOutcome {
   /** a pre hook (exit code 2 or {"decision":"block"}) refused the action */
@@ -13,6 +13,8 @@ export interface HookOutcome {
   reason?: string;
   /** extra context to hand to the model */
   context?: string;
+  /** a permissionRequest hook answered {"decision":"allow"} */
+  allow?: boolean;
 }
 
 /**
@@ -34,6 +36,7 @@ export class HookRunner {
   async run(event: HookEvent, payload: Record<string, unknown>, opts: { toolName?: string; cwd: string }): Promise<HookOutcome> {
     const list: HookConfig[] = (this.hooks[event] ?? []).filter((h) => !h.matcher || !opts.toolName || matchGlob(opts.toolName, h.matcher));
     const contexts: string[] = [];
+    let allow = false;
     for (const h of list) {
       const res = await runShell(h.command, {
         cwd: opts.cwd,
@@ -51,6 +54,7 @@ export class HookRunner {
         try {
           const j = JSON.parse(out) as { decision?: string; reason?: string; context?: string; additionalContext?: string };
           if (j.decision === 'block' || j.decision === 'deny') return { blocked: true, reason: j.reason ?? `blocked by ${event} hook` };
+          if (j.decision === 'allow' || j.decision === 'approve') allow = true;
           const ctx = j.context ?? j.additionalContext;
           if (ctx) contexts.push(ctx);
           continue;
@@ -60,6 +64,6 @@ export class HookRunner {
       }
       if (out) contexts.push(out);
     }
-    return { blocked: false, context: contexts.length ? contexts.join('\n') : undefined };
+    return { blocked: false, allow: allow || undefined, context: contexts.length ? contexts.join('\n') : undefined };
   }
 }
