@@ -197,6 +197,13 @@ export class Agent {
   /** weak-model nudges used in this run (empty replies, announced-but-not-called actions) */
   private replyNudges = { empty: 0, intent: 0 };
   private lastVerify: boolean | undefined;
+  /** the latest check of this run (verify, or a test/lint/typecheck/build run from the shell) */
+  private lastCheck: { label: string; ok: boolean } | undefined;
+  /** the plan was written in this run (older todos may belong to an abandoned task) */
+  private todosThisRun = false;
+  private finishNudged = false;
+  /** code files changed in this run */
+  private codeEdits = 0;
   private runSkills = new Set<string>();
   private skillUses = new Map<string, number>();
   private lastContextTokens = 0;
@@ -407,6 +414,7 @@ export class Agent {
 
   setTodos(todos: Todo[]): void {
     this.todos = todos;
+    if (this.running) this.todosThisRun = true;
     this.saveSession({ meta: { todos } });
     this.emit({ type: 'todos', runId: this.currentRunId, todos });
   }
@@ -473,8 +481,9 @@ export class Agent {
   }
 
   /** Result of the latest verify call; clears the "edited but unverified" state when it passed. */
-  noteVerification(ok: boolean): void {
+  noteVerification(ok: boolean, label = 'verify'): void {
     this.lastVerify = ok;
+    this.lastCheck = { label, ok };
     this.editsSinceVerify = 0;
   }
 
@@ -623,6 +632,10 @@ export class Agent {
     this.moaTrouble = false;
     this.replyNudges = { empty: 0, intent: 0 };
     this.lastVerify = undefined;
+    this.lastCheck = undefined;
+    this.todosThisRun = false;
+    this.finishNudged = false;
+    this.codeEdits = 0;
     this.runSkills.clear();
     let runUsage = emptyUsage();
     let finalText = '';
@@ -825,6 +838,14 @@ export class Agent {
             this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: `Background agents ${pendingAgents.map((a) => `${a.id} (${a.label}, ${a.status})`).join(', ')} have results you have not collected. Call agents(action: "wait") to get them (or "stop" those you no longer need) before your final answer.` }], createdAt: Date.now(), meta: { kind: 'note' } }]);
             continue;
           }
+          const gaps = res.stopReason === 'end_turn' && iter < maxIter && !this.finishNudged ? this.finishGaps() : undefined;
+          if (gaps) {
+            // the harness, not the model, decides whether the work looks finished
+            this.finishNudged = true;
+            this.notice('info', 'Asking to close open plan items or a failing check before finishing.');
+            this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: gaps }], createdAt: Date.now(), meta: { kind: 'note' } }]);
+            continue;
+          }
           if (res.stopReason === 'end_turn' && iter < maxIter && this.shouldSelfReview()) {
             this.selfReviewed = true;
             const note = await this.selfReview(signal).catch((e) => (log.debug('self-review failed', e), ''));
@@ -953,6 +974,26 @@ export class Agent {
       .map((f) => `- [${f.severity}] ${f.path}:${f.startLine} — ${f.title}: ${truncate(f.body, 400)}${f.suggestion ? `\n  suggested: ${truncate(f.suggestion, 300)}` : ''}`)
       .join('\n');
     return `Before you finish: an independent review of the uncommitted changes found these possible problems.\n${list}\nFor each one in code you changed in this task: fix it if it is real (then re-run the relevant checks), or state briefly why it is not a problem. Ignore findings about changes that are not yours.`;
+  }
+
+  /**
+   * What stands between this run and a finished task: plan items still open, or a check that
+   * failed and has not passed since. One reminder per run; the model may still finish, but has to
+   * say so plainly instead of reporting success.
+   */
+  private finishGaps(): string | undefined {
+    if (this.mode === 'plan') return undefined;
+    const parts: string[] = [];
+    const open = this.todosThisRun ? this.todos.filter((t) => t.status === 'pending' || t.status === 'in_progress') : [];
+    if (open.length) {
+      parts.push(`Your plan still has ${open.length} open item${open.length === 1 ? '' : 's'}: ${open.slice(0, 8).map((t) => `"${truncate(t.content, 100)}" (${t.status})`).join(', ')}. Do them now; mark an item cancelled only if it turned out to be unnecessary, and update todo_write.`);
+    }
+    // only when this run changed code: "run the tests and tell me what fails" is answered by reporting
+    if (this.lastCheck && !this.lastCheck.ok && this.codeEdits > 0) {
+      parts.push(`The last check of this run failed: ${this.lastCheck.label}, and nothing has passed since. Fix the cause and re-run it until it passes.`);
+    }
+    if (!parts.length) return undefined;
+    return `Before you finish:\n${parts.map((p) => `- ${p}`).join('\n')}\nIf something truly cannot be done here, say exactly what is unfinished or failing in your answer — do not report the task as done.`;
   }
 
   private shouldVerifyBeforeFinish(): boolean {
@@ -1150,6 +1191,7 @@ export class Agent {
       const touched = [...((out.meta?.paths as string[] | undefined) ?? []), ...(typeof out.meta?.path === 'string' ? [out.meta.path] : [])];
       if (!touched.length || touched.some((p) => !isNonCodePath(p))) {
         this.editsSinceVerify += 1;
+        this.codeEdits += 1;
         this.linesChanged += Number(out.meta?.added ?? 0) + Number(out.meta?.removed ?? 0);
       }
       this.readCache.clear();
@@ -1158,7 +1200,7 @@ export class Agent {
     let checkNote = '';
     if (call.name === 'shell' && typeof input.command === 'string' && !input.background && out.meta && typeof out.meta.exitCode === 'number') {
       const run = checkRun(input.command);
-      if (run?.attributable) this.noteVerification(out.meta.exitCode === 0);
+      if (run?.attributable) this.noteVerification(out.meta.exitCode === 0, `\`${truncate(input.command, 120)}\` (exit ${out.meta.exitCode})`);
       else if (run && out.meta.exitCode === 0)
         checkNote = `\n\nNote: this exit status is ${run.maskedBy === '|| true' ? 'forced to 0 by `|| true`' : `the one of \`${run.maskedBy ?? 'the last command'}\`, not of the ${run.kind}`} — it does not show whether the ${run.kind} passed. Read the output above, or re-run with \`set -o pipefail;\` or without the pipe.`;
     }

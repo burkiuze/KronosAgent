@@ -509,3 +509,42 @@ describe('self-review before finishing', () => {
     expect(r.text).toBe('Fixed avg for empty input.');
   });
 });
+
+describe('finishing with open work', () => {
+  it('asks once to close open plan items and a failing check, and not when nothing was changed', async () => {
+    // no package.json: `npm test` fails at once
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        step++;
+        if (step === 1)
+          return {
+            parts: [
+              { type: 'tool_call', id: 't1', name: 'todo_write', input: { todos: [{ id: '1', content: 'fix parser', status: 'completed' }, { id: '2', content: 'add tests', status: 'pending' }] } } as ToolCallPart,
+              { type: 'tool_call', id: 'w1', name: 'write_file', input: { path: 'lib.js', content: 'export const x = 1;\n' } } as ToolCallPart,
+            ],
+            stopReason: 'tool_use',
+            usage,
+            model: 'scripted',
+          };
+        if (step === 2) return { parts: [{ type: 'tool_call', id: 's1', name: 'shell', input: { command: 'npm test' } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' };
+        return { parts: [{ type: 'text', text: step === 3 ? 'Done.' : 'Not done: tests still fail.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    const r = await env.rt.agent(s.id).run('fix the parser and add tests');
+    const notes = env.rt.sessions.messages(s.id).filter((m) => messageText(m).startsWith('Before you finish:\n'));
+    expect(notes).toHaveLength(1);
+    expect(messageText(notes[0]!)).toContain('"add tests" (pending)');
+    expect(messageText(notes[0]!)).toMatch(/last check of this run failed: `npm test` \(exit [1-9]\d*\)/);
+    expect(r.text).toBe('Not done: tests still fail.');
+
+    // a run that only reports on failing tests is not asked to fix them
+    step = 2;
+    const s2 = env.rt.createSession({ source: 'test' });
+    await env.rt.agent(s2.id).run('run the tests and tell me what fails');
+    expect(env.rt.sessions.messages(s2.id).some((m) => messageText(m).startsWith('Before you finish:\n'))).toBe(false);
+  });
+});
