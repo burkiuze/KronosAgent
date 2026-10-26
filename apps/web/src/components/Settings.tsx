@@ -181,6 +181,7 @@ const DEFS: Def[] = [
   { section: 'safety', key: 'safety.checkpoints', label: 'File checkpoints', desc: 'Snapshot files before edits so /undo can restore them.', kind: 'toggle' },
   { section: 'safety', key: 'safety.redactSecrets', label: 'Redact secrets in tool output', kind: 'toggle' },
 
+  { section: 'memory', key: 'memory.recaps', label: 'Remember past work', desc: 'After a conversation goes quiet, Kronos writes its task history to a recap file and keeps an index of past work in every new conversation — so "continue yesterday\'s refactor" just works. Uses a few background model calls.', kind: 'toggle' },
   { section: 'memory', key: 'memory.enabled', label: 'Persistent memory', kind: 'toggle' },
   { section: 'memory', key: 'memory.memoryCharLimit', label: 'MEMORY.md limit (chars)', kind: 'number', min: 500, max: 50000, step: 500 },
   { section: 'memory', key: 'memory.userCharLimit', label: 'USER.md limit (chars)', kind: 'number', min: 500, max: 50000, step: 500 },

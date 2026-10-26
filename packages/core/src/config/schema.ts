@@ -142,6 +142,8 @@ export interface KronosConfig {
     userCharLimit: number;
     sessionSearch: boolean;
     autoExtract: boolean;
+    /** recap idle conversations and keep an index of past work in every new conversation's context */
+    recaps: boolean;
   };
   skills: {
     enabled: boolean;
@@ -344,7 +346,7 @@ export function defaultConfig(): KronosConfig {
       protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '~/.kronos/github-app.json', '~/.kronos/profiles/*/github-app.json', '/etc/shadow'],
       guardian: { mode: 'unattended', model: null },
     },
-    memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false },
+    memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false, recaps: false },
     skills: { enabled: true, dirs: [], disabled: [], autoCreate: true, claudeCompat: true, editBudget: 3, staleAfterDays: 60 },
     web: {
       search: { provider: 'auto' },

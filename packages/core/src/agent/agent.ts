@@ -281,7 +281,7 @@ export class Agent {
       personality: cfg.agent.personality,
       instructions: cfg.agent.instructions,
       contextFiles: discoverContextFiles(this.session.cwd, this.rt.home),
-      memory: cfg.memory.enabled && this.tools.some((t) => t.name === 'memory') ? this.rt.memory.snapshot() : undefined,
+      memory: cfg.memory.enabled && this.tools.some((t) => t.name === 'memory') ? this.memoryBlock() : undefined,
       skillsIndex: cfg.skills.enabled && this.tools.some((t) => t.name === 'skill_view') ? this.rt.skills.promptIndex() : undefined,
       agentTypes: this.rt.agentDefinitions(this.session.cwd),
       mcpInstructions: this.rt.mcp.instructions() || undefined,
@@ -293,6 +293,12 @@ export class Agent {
       lean,
     });
     this.saveSession({ systemPrompt: prompt, toolNames: this.tools.map((t) => t.name), meta: { lean } });
+  }
+
+  /** Memory notes, user profile and — with memory.recaps — the index of past work. */
+  private memoryBlock(): string {
+    const index = this.depth === 0 ? this.rt.recaps.index() : undefined;
+    return `${this.rt.memory.snapshot()}${index ? `\n\nPAST WORK (index of earlier conversations)\n${index}` : ''}`;
   }
 
   /** Rebuild the frozen context (new memory/skills/tools) — starts a new cache prefix. */
@@ -873,6 +879,9 @@ export class Agent {
     const mem = this.rt.config.memory;
     if (this.depth === 0 && mem.enabled && mem.autoExtract && !error && stopReason === 'end_turn' && text.trim()) {
       void this.rt.track(this.extractMemories(text));
+    }
+    if (this.depth === 0 && mem.enabled && mem.recaps) {
+      this.rt.recaps.schedule();
     }
     return { runId, text, stopReason, usage, durationMs, error, toolCalls };
   }

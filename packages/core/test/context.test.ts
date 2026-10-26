@@ -247,3 +247,41 @@ describe('tool_search', () => {
     env.rt.tools.unregisterWhere((d) => d.name.startsWith('mcp__corp__'));
   });
 });
+
+describe('recaps of past work', () => {
+  it('writes a task history per idle conversation and an index that new conversations see', async () => {
+    const prompts: string[] = [];
+    env.rt.updateConfig({ memory: { recaps: true } } as never); // before inject: a config change rebuilds the providers
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (req.system.startsWith('You are part of an agent')) {
+          prompts.push(messageText(req.messages[0]!));
+          return { parts: [{ type: 'text', text: '{"summary": "## Migrate auth to OAuth\\n- user asked to migrate src/auth.ts; token=ghp_abcdefghijklmnopqrstuvwxyz0123456789\\n- done: login works; open: refresh tokens", "slug": "oauth-migration"}' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        }
+        if (req.system.startsWith('Consolidate')) return { parts: [{ type: 'text', text: '## User profile\nDeveloper of acme.\n## User preferences\n(none)\n## Past work\n### acme\n`2026-10-20-oauth-migration.md` — OAuth migration, refresh tokens open' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        return { parts: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'cli', title: 'OAuth' });
+    const agent = env.rt.agent(s.id);
+    await agent.run('migrate src/auth.ts to OAuth');
+    await agent.run('now add refresh tokens');
+    const old = new Date('2026-10-20T10:00:00Z').getTime();
+    env.rt.sessions.update(s.id, { updatedAt: old });
+    expect(env.rt.recaps.eligible().map((x) => x.id)).toEqual([s.id]);
+    const r = await env.rt.recaps.run();
+    expect(r).toEqual({ recapped: ['2026-10-20-oauth-migration.md'], indexed: true });
+    expect(prompts[0]).toContain('USER: migrate src/auth.ts to OAuth');
+    const recap = readFileSync(join(env.rt.recaps.dir, '2026-10-20-oauth-migration.md'), 'utf8');
+    expect(recap).toContain(`session: ${s.id}`);
+    expect(recap).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789'); // secrets redacted
+    // done once: nothing left until the conversation changes again
+    expect(env.rt.recaps.eligible()).toEqual([]);
+    // a new conversation starts knowing about the past work
+    const next = env.rt.createSession({ source: 'cli' });
+    await env.rt.agent(next.id).run('hi');
+    expect(env.rt.sessions.get(next.id)?.systemPrompt).toContain('PAST WORK (index of earlier conversations)');
+    expect(env.rt.sessions.get(next.id)?.systemPrompt).toContain('2026-10-20-oauth-migration.md');
+  });
+});
