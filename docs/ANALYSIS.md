@@ -235,6 +235,33 @@ memory — against Docker's daemon and a container per workspace.
   check after every edit), session search, skills with provenance, progressive disclosure of large
   tool sets in lean mode.
 
+### Second pass: what else we took, module by module
+
+| From | Module | In Kronos |
+|---|---|---|
+| Codex | `execpolicy`, `shell-command` (tree-sitter bash) | `safety/shellparse`: commands are parsed (quotes, `&&`/`;`/`|`, wrappers like `env`, `sudo`, `xargs`, `sh -c`); read-only detection checks arguments; allow rules must cover every command in a line; "always allow" never suggests a broad prefix. Fixed two holes this found: `env <cmd>` counted as read-only, and `git status*` approving `git status && rm -rf src` |
+| Codex | on-request approvals | with the OS sandbox on, Auto-edit runs non-dangerous commands without asking |
+| Codex | guardian | `safety/guardian`: a second model rates risk and user authorization of actions nobody is there to approve (bot, automations); critical always refused |
+| Codex | compaction | earlier user messages are carried verbatim next to the summary |
+| Codex | unified exec | a command past its timeout moves to the background instead of being killed |
+| Codex | tool_search | large MCP tool sets are searched and loaded on demand |
+| Codex | memories (two phases) | `memory.recaps`: task-history recaps of idle conversations and an index of past work in new conversations |
+| Codex | hooks | `permissionRequest` and `preCompact` hooks |
+| Codex | multi-agent v2 | the `agents` tool: background subagents (spawn / wait / send / stop) |
+| Codex | `exec --output-schema`, `--json` | `kronos run --output-schema`, `--events`, `--output-last-message`, `-c`, `--ephemeral`; `response_format` in the OpenAI-compatible API |
+| Codex | network proxy | `terminal.sandbox.allowDomains`: sandboxed commands reach only listed hosts through a filtering proxy, enforced with Landlock port rules |
+| Codex | AGENTS.override.md | read in place of AGENTS.md |
+| Hermes | fuzzy_match, escape_drift_autocorrect | `util/editmatch`: forgiving edit matching (indentation, whitespace, Unicode, escapes, anchors) with re-indentation |
+| Hermes | background_review | `agent.nudges.learning: background`: a separate agent updates memory and skills after a turn |
+| Hermes | approval_smart | guardian strips shell comments (injection vector) and takes operator policy |
+| Hermes | agent/lsp | `agent.lsp`: errors an edit introduced, from installed language servers |
+| Hermes | code_kernel | `execute_code persistent: true`: notebook-like Python/JavaScript kernels |
+| Hermes | osv_check | malware check (OSV MAL-*) before installing packages or starting MCP servers |
+| Hermes | credential_pool | comma-separated API keys rotate on rate limits and rejections |
+| Hermes | url_safety, browser_url_policy | web tools and the browser never reach cloud metadata, also through redirects |
+| Hermes | context_references | `@diff`, `@staged`, `@git:<rev>`, `@url:<address>` in prompts |
+| open-code-review | `ocr scan`, `--preview` | `kronos review --scan`, `--preview` |
+
 ### Resource use
 
 Kronos keeps the "normal agent" footprint: a Node.js process (the gateway idles at a few tens of
