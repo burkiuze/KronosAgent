@@ -375,3 +375,26 @@ describe('structured output', () => {
     expect(r.schemaErrors).toBeUndefined();
   });
 });
+
+describe('learning review', () => {
+  it('updates memory in the background after a correction, without touching the conversation', async () => {
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        if (req.system.includes('You maintain the memory and skill library')) {
+          const done = req.messages.flatMap((m) => m.parts).some((p) => p.type === 'tool_result');
+          if (!done) return { parts: [{ type: 'tool_call', id: 'm1', name: 'memory', input: { action: 'add', target: 'user', content: 'Wants answers without bullet lists.' } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' };
+          return { parts: [{ type: 'text', text: 'Saved.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        }
+        return { parts: [{ type: 'text', text: 'Understood.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    await env.rt.agent(s.id).run("don't answer with bullet lists, I prefer prose");
+    for (let i = 0; i < 50 && !env.rt.memory.entries('user').length; i++) await new Promise((r) => setTimeout(r, 50));
+    expect(env.rt.memory.entries('user')).toEqual(['Wants answers without bullet lists.']);
+    // the main conversation has no reminder notes in it
+    expect(env.rt.sessions.messages(s.id).some((m) => m.role === 'system')).toBe(false);
+  });
+});

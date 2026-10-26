@@ -28,6 +28,8 @@ import type { AgentDefinition } from './definitions.js';
 import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
 import { reviewAction } from '../safety/guardian.js';
 import { deferredTools } from '../tools/toolsearch.js';
+import { LEARNING_REVIEWER, hasLearningSignal } from './learning.js';
+import { recapTranscript } from '../memory/recaps.js';
 import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
 import { LoopWatch } from './watchdog.js';
@@ -839,7 +841,11 @@ export class Agent {
         }
       }
 
-      if (cfg.skills.autoCreate && toolCallCount >= cfg.agent.nudges.skillAfterToolCalls && this.depth === 0 && stop === 'end_turn') {
+      const learning = cfg.agent.nudges.learning ?? 'inline';
+      const lastUserText = messageText(this.lastUserMessage() ?? { parts: [] } as unknown as Message);
+      if (learning === 'background' && this.depth === 0 && stop === 'end_turn' && (cfg.skills.autoCreate || cfg.memory.enabled) && (toolCallCount >= cfg.agent.nudges.skillAfterToolCalls || hasLearningSignal(lastUserText))) {
+        void this.rt.track(this.learningReview());
+      } else if (learning === 'inline' && cfg.skills.autoCreate && toolCallCount >= cfg.agent.nudges.skillAfterToolCalls && this.depth === 0 && stop === 'end_turn') {
         this.append([
           {
             id: newId('m_'),
@@ -1690,6 +1696,34 @@ export class Agent {
     this.saveSession({ title });
     this.rt.artifacts.renameSession(this.session.id, title);
     this.emit({ type: 'title', runId: this.currentRunId, sessionId: this.session.id, title });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Learning review (agent.nudges.learning: background)
+  // ---------------------------------------------------------------------------
+
+  /** A separate agent reads the turn and updates memory and skills; the conversation is untouched. */
+  private async learningReview(): Promise<void> {
+    const session = this.rt.sessions.create({ title: '↳ Learning review', parentId: this.session.id, cwd: this.session.cwd, source: 'subagent', profile: this.session.profile, model: this.session.model, mode: 'yolo' });
+    const reviewer = this.rt.createAgent({ session, surface: 'subagent', depth: 1, definition: LEARNING_REVIEWER, autoApprove: true, toolFilter: { only: LEARNING_REVIEWER.tools } });
+    const changes: string[] = [];
+    const off = reviewer.events.on((e) => {
+      if (e.type === 'tool_call' && (e.name === 'memory' || e.name === 'skill_manage') && !/^(view|list|read)/.test(String((e.input as { action?: string }).action ?? ''))) changes.push(e.summary);
+    });
+    try {
+      const recent = this.messages.slice(-40);
+      const used = [...this.runSkills];
+      await reviewer.run(
+        {
+          text: `Conversation to review${used.length ? ` (skills used: ${used.join(', ')})` : ''}:\n\n${recapTranscript(recent, 40_000)}\n\nUpdate memory and skills if this conversation warrants it.`,
+        },
+        { maxIterations: 12 },
+      );
+      if (changes.length) this.notice('info', `Learned from this conversation: ${truncate(changes.join(' · '), 300)}`);
+    } finally {
+      off();
+      this.rt.releaseAgent(session.id);
+    }
   }
 
   // ---------------------------------------------------------------------------

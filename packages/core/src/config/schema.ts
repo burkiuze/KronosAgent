@@ -94,7 +94,12 @@ export interface KronosConfig {
      */
     compaction: { enabled: boolean; threshold: number; keepRecentTurns: number; clearToolResults: boolean; keepToolResults: number };
     subagents: { maxConcurrent: number; maxDepth: number; maxIterations: number };
-    nudges: { memoryEvery: number; skillAfterToolCalls: number };
+    /**
+     * learning: "background" — after a substantial turn (skillAfterToolCalls tool calls) or one with
+     * a correction, a separate agent updates memory and skills (Hermes-style); "inline" — remind the
+     * agent in the conversation instead; "off"
+     */
+    nudges: { memoryEvery: number; skillAfterToolCalls: number; learning: 'background' | 'inline' | 'off' };
     /** when a run edited files but never ran verify afterwards, ask for verification once before finishing */
     verifyBeforeFinish: boolean;
     /** parse files right after write/edit/patch and report syntax errors in the same tool result */
@@ -134,7 +139,7 @@ export interface KronosConfig {
      * a second model decides on actions that would need approval: "unattended" when no person can
      * answer (GitHub bot, automations, headless runs), "always" before every prompt, or "off"
      */
-    guardian: { mode: 'off' | 'unattended' | 'always'; model: string | null };
+    guardian: { mode: 'off' | 'unattended' | 'always'; model: string | null; /** extra trusted rules for the reviewer */ policy: string };
   };
   memory: {
     enabled: boolean;
@@ -324,7 +329,7 @@ export function defaultConfig(): KronosConfig {
       language: 'auto',
       compaction: { enabled: true, threshold: 0.8, keepRecentTurns: 2, clearToolResults: true, keepToolResults: 8 },
       subagents: { maxConcurrent: 4, maxDepth: 2, maxIterations: 60 },
-      nudges: { memoryEvery: 12, skillAfterToolCalls: 18 },
+      nudges: { memoryEvery: 12, skillAfterToolCalls: 18, learning: 'background' },
       verifyBeforeFinish: true,
       editDiagnostics: true,
       lean: 'auto',
@@ -348,7 +353,7 @@ export function defaultConfig(): KronosConfig {
       redactSecrets: true,
       checkpoints: true,
       protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '~/.kronos/github-app.json', '~/.kronos/profiles/*/github-app.json', '/etc/shadow'],
-      guardian: { mode: 'unattended', model: null },
+      guardian: { mode: 'unattended', model: null, policy: '' },
     },
     memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false, recaps: false },
     skills: { enabled: true, dirs: [], disabled: [], autoCreate: true, claudeCompat: true, editBudget: 3, staleAfterDays: 60 },
