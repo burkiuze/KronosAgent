@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:http';
@@ -11,7 +11,8 @@ const cfg = { mode: 'workspace-write' as const, network: true, writable: [], fal
 
 describe('sandbox planning', () => {
   it('lets commands write only to the project, temp and configured directories', () => {
-    const root = mkdtempSync(join(tmpdir(), 'kronos-sb-'));
+    // real path: on macOS the temp dir is under a symlink (/var -> /private/var) and roots are resolved
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'kronos-sb-')));
     mkdirSync(join(root, 'repo', '.git'), { recursive: true });
     mkdirSync(join(root, 'repo', 'src', 'deep'), { recursive: true });
     mkdirSync(join(root, 'cache'));
@@ -34,9 +35,11 @@ describe('sandbox planning', () => {
 });
 
 const engine = detectSandbox();
+// the Landlock helper on Linux and Seatbelt on macOS (CI runs both)
+const enforcing = 'engine' in engine && (engine.engine === 'kronos-sandbox' || engine.engine === 'seatbelt');
 const linuxHelper = 'engine' in engine && engine.engine === 'kronos-sandbox';
 
-describe.skipIf(!linuxHelper)('sandboxed shell (Landlock helper)', () => {
+describe.skipIf(!enforcing)(`sandboxed shell (${'engine' in engine ? engine.engine : 'none'})`, () => {
   let env: TestEnv;
   let outside: string;
   beforeEach(async () => {
@@ -52,8 +55,8 @@ describe.skipIf(!linuxHelper)('sandboxed shell (Landlock helper)', () => {
 
   it('runs commands that stay in the workspace and stops the ones that do not', async () => {
     const run = (command: string) => env.rt.backend.exec(command, { cwd: env.workspace, timeoutMs: 20_000 });
-    expect(env.rt.backend.describe()).toMatch(/sandboxed \(Landlock v\d+.*\): writes limited to the project and temp, no network/);
-    const ok = await run('echo inside > inside.txt && cat inside.txt && cat /etc/hostname > /dev/null && echo read-ok');
+    expect(env.rt.backend.describe()).toMatch(linuxHelper ? /sandboxed \(Landlock v\d+.*\): writes limited to the project and temp, no network/ : /sandboxed \(macOS Seatbelt\).*no network/);
+    const ok = await run('echo inside > inside.txt && cat inside.txt && cat /etc/hosts > /dev/null && echo read-ok');
     expect(ok.exitCode).toBe(0);
     expect(ok.output).toContain('read-ok');
     expect(readFileSync(join(env.workspace, 'inside.txt'), 'utf8')).toBe('inside\n');
