@@ -90,6 +90,7 @@ const DEFS: Def[] = [
   },
   { section: 'model', key: 'model.showThinking', label: 'Show thinking', desc: 'Stream reasoning summaries into the chat.', kind: 'toggle' },
   { section: 'model', key: 'model.fallbacks', label: 'Fallback models', desc: 'Tried in order when the primary model fails.', kind: 'list', placeholder: 'openai:gpt-5.5, openrouter:…' },
+  { section: 'model', key: 'model.advisors', label: 'Advisor models (/moa)', desc: 'With /moa, these models advise before key steps and after failures; the acting model decides. Empty = a fresh second opinion from the same model.', kind: 'list', placeholder: 'openai:gpt-5.5, gemini:gemini-3-pro' },
   { section: 'model', key: 'model.subagent', label: 'Subagent model', desc: 'Model for delegated subagents (empty = same as parent). A cheaper model saves cost.', kind: 'model' },
   { section: 'model', key: 'model.summary', label: 'Summary/title model', desc: 'Used for compaction and titles (empty = automatic small model).', kind: 'model' },
   { section: 'model', key: 'model.maxOutputTokens', label: 'Max output tokens', kind: 'number', min: 1024, max: 300000, step: 1024 },

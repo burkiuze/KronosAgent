@@ -67,6 +67,8 @@ export interface KronosConfig {
     maxOutputTokens: number;
     temperature?: number | null;
     subagent?: string | null;
+    /** /moa: models asked for advice (no tools) before the acting model decides; empty = a second opinion from the same model */
+    advisors?: string[];
     summary?: string | null;
     vision?: string | null;
     /**
@@ -301,6 +303,7 @@ export function defaultConfig(): KronosConfig {
       maxOutputTokens: 64000,
       temperature: null,
       subagent: null,
+      advisors: [],
       summary: null,
       vision: null,
       toolMode: 'auto',

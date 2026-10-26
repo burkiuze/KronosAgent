@@ -41,7 +41,7 @@ import { formatLspErrors } from '../tools/lsp.js';
 import { describeArgs, exampleArgs, resolveToolName, suggestTools } from '../providers/toolcalls.js';
 import { PermissionPolicy, primaryArg } from '../safety/permissions.js';
 import { validateInput } from '../util/schema.js';
-import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError } from '../util/misc.js';
+import { Emitter, errorMessage, isAbortError, mapLimit, newId, abortError, withTimeout } from '../util/misc.js';
 import { estimateMessagesTokens, estimateTokens, redactSecrets, truncate, truncateMiddle } from '../util/text.js';
 import { costOf } from '../providers/catalog.js';
 import { NotConnectedError } from '../providers/errors.js';
@@ -89,6 +89,8 @@ export interface AgentOptions {
 
 export interface AgentRunOptions {
   model?: string;
+  /** mixture of agents for this run: advisor models are consulted before key steps */
+  moa?: boolean;
   signal?: AbortSignal;
   maxIterations?: number;
 }
@@ -120,6 +122,12 @@ export interface DelegateResult {
   durationMs: number;
   usage: Usage;
 }
+
+const ADVISOR_SYSTEM = [
+  'You are an advisor in a mixture of agents. A separate acting agent works on the task below with tools; you only advise it.',
+  'You cannot run commands or open files and must never claim to have done so. Reason from the transcript: understand the goal, judge what has been done, and say what to do next — the best approach, concrete steps, pitfalls, and anything the agent missed or got wrong.',
+  'Be direct and specific (files, functions, commands). No preamble, no tool-call syntax. Your advice is private guidance for the acting agent, not an answer for the user.',
+].join('\n');
 
 export interface BackgroundAgent {
   id: string;
@@ -167,6 +175,8 @@ export class Agent {
   private readFiles = new Set<string>();
   /** subagents started with agents(action: spawn), running while this agent keeps working */
   private bgAgents = new Map<string, BackgroundAgent>();
+  /** a step went wrong in a /moa run: ask the advisors again before the next one */
+  private moaTrouble = false;
   private bgNudged = false;
   /** mtime/size of each file as this agent last read or wrote it (stale-write guard) */
   private fileStamps = new Map<string, { mtimeMs: number; size: number }>();
@@ -602,6 +612,9 @@ export class Agent {
     this.editsSinceVerify = 0;
     this.verifyNudged = false;
     this.bgNudged = false;
+    const moa = Boolean(opts.moa || inp.meta?.command === 'moa');
+    let moaRounds = 0;
+    this.moaTrouble = false;
     this.replyNudges = { empty: 0, intent: 0 };
     this.lastVerify = undefined;
     this.runSkills.clear();
@@ -694,6 +707,11 @@ export class Agent {
           break;
         }
         await this.maybeCompact(model, runId, signal);
+        if (moa && (iter === 1 || this.moaTrouble) && moaRounds < 4) {
+          moaRounds++;
+          this.moaTrouble = false;
+          await this.consultAdvisors(model, runId, signal).catch((e) => log.debug('advisors failed', e));
+        }
         this.emit({ type: 'turn_start', runId, iteration: iter });
         partialText = '';
         const req: ChatRequest = {
@@ -1103,6 +1121,7 @@ export class Agent {
       else if (run && out.meta.exitCode === 0)
         checkNote = `\n\nNote: this exit status is ${run.maskedBy === '|| true' ? 'forced to 0 by `|| true`' : `the one of \`${run.maskedBy ?? 'the last command'}\`, not of the ${run.kind}`} — it does not show whether the ${run.kind} passed. Read the output above, or re-run with \`set -o pipefail;\` or without the pipe.`;
     }
+    if (out.isError || (call.name === 'verify' && /VERIFY: FAIL/.test(out.content ?? ''))) this.moaTrouble = true;
     let content = (out.content ?? '') + checkNote;
     // untrusted content (web pages, API responses, MCP servers) that tries to instruct the agent is flagged
     if (!out.isError && UNTRUSTED_TOOLS.test(call.name) && content.length > 40) {
@@ -1759,6 +1778,61 @@ export class Agent {
     this.saveSession({ title });
     this.rt.artifacts.renameSession(this.session.id, title);
     this.emit({ type: 'title', runId: this.currentRunId, sessionId: this.session.id, title });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mixture of agents (/moa) — after Hermes' moa_loop
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Ask the advisor models (model.advisors; default: a fresh second opinion from the same model) what
+   * to do next, in parallel and without tools, and hand their advice to the acting model as guidance.
+   */
+  private async consultAdvisors(model: ModelInfo, runId: string, signal: AbortSignal): Promise<void> {
+    const refs = this.rt.config.model.advisors?.length ? this.rt.config.model.advisors : [model.ref];
+    const transcript = recapTranscript(this.messages.slice(-40), 30_000);
+    this.notice('info', `Consulting ${refs.length} advisor${refs.length === 1 ? '' : 's'}: ${refs.join(', ')}`);
+    const answers = await Promise.all(
+      refs.slice(0, 4).map(async (ref) => {
+        try {
+          const res = await withTimeout(
+            this.rt.providers.chat(
+              {
+                model: this.rt.providers.resolve(ref),
+                system: ADVISOR_SYSTEM,
+                messages: [{ id: newId('m_'), role: 'user', parts: [{ type: 'text', text: `Current state of the task:\n\n${transcript}\n\nWhat should the acting agent do next?` }], createdAt: Date.now() }],
+                tools: [],
+                maxTokens: 1500,
+                effort: 'high',
+                thinking: false,
+                showThinking: false,
+                signal,
+              },
+              () => undefined,
+              [],
+            ),
+            120_000,
+            'advisor',
+          );
+          const text = textOf(res.parts).trim();
+          return text ? `## Advisor ${ref}\n${truncate(redactSecrets(text), 6000)}` : '';
+        } catch (e) {
+          return isAbortError(e) ? '' : `## Advisor ${ref}\n(unavailable: ${truncate(errorMessage(e), 120)})`;
+        }
+      }),
+    );
+    const body = answers.filter(Boolean).join('\n\n');
+    if (!body) return;
+    this.append([
+      {
+        id: newId('m_'),
+        role: 'system',
+        parts: [{ type: 'text', text: `<advisors>\nOther models reviewed the task so far and advise as follows. They cannot see files or run tools; weigh their points against what you know, take what is right, and decide yourself.\n\n${body}\n</advisors>` }],
+        createdAt: Date.now(),
+        meta: { kind: 'note' },
+      },
+    ]);
+    void runId;
   }
 
   // ---------------------------------------------------------------------------

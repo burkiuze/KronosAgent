@@ -444,3 +444,31 @@ describe('context references', () => {
     expect((await env.rt.expandInput('@git:$(rm)', env.workspace)).files?.[0]?.text).toMatch(/could not load/);
   });
 });
+
+describe('mixture of agents', () => {
+  it('asks the advisors before the first step and again after something fails', async () => {
+    env.rt.updateConfig({ model: { advisors: ['kronos:demo', 'kronos:demo-2'] } } as never);
+    const advisorCalls: string[] = [];
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (req.system.startsWith('You are an advisor')) {
+          advisorCalls.push(req.model.ref);
+          return { parts: [{ type: 'text', text: `Check the config file first (${advisorCalls.length}).` }], stopReason: 'end_turn', usage, model: 'scripted' };
+        }
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        step++;
+        if (step === 1) return { parts: [{ type: 'tool_call', id: 'c1', name: 'read_file', input: { path: 'missing.txt' } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' };
+        return { parts: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    await env.rt.agent(s.id).run(await env.rt.expandInput('/moa fix the config loader'));
+    // two advisors before step 1, two again after the failed read
+    expect(advisorCalls).toHaveLength(4);
+    const notes = env.rt.sessions.messages(s.id).filter((m) => messageText(m).includes('<advisors>'));
+    expect(notes).toHaveLength(2);
+    expect(messageText(notes[0]!)).toContain('Check the config file first');
+  });
+});

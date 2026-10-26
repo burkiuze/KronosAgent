@@ -94,6 +94,12 @@ export interface SkillStats {
 /** Slash commands every installation has (a custom command of the same name replaces one). */
 const BUILTIN_COMMANDS: (CommandInfo & { template: (args: string) => string })[] = [
   {
+    name: 'moa',
+    description: 'Mixture of agents: other models advise before every key step of this task (model.advisors)',
+    source: 'command',
+    template: (args) => args || 'Continue the current task.',
+  },
+  {
     name: 'review',
     description: 'Review changes with verified findings: uncommitted (default), a branch ("main"), a commit or a pull request ("#12")',
     source: 'command',
