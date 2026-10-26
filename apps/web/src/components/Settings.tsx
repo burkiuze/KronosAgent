@@ -166,6 +166,18 @@ const DEFS: Def[] = [
   { section: 'safety', key: 'safety.deny', label: 'Deny rules', desc: 'Always refuse these.', kind: 'list' },
   { section: 'safety', key: 'safety.protectedPaths', label: 'Protected paths', desc: 'Writes always ask.', kind: 'list' },
   { section: 'safety', key: 'safety.workspaceOnly', label: 'Restrict writes to the workspace', kind: 'toggle' },
+  {
+    section: 'safety',
+    key: 'safety.guardian.mode',
+    label: 'Safety reviewer',
+    desc: 'A second model judges actions that need approval — risk against what you actually asked for. Unattended: only when nobody can answer (GitHub bot, automations). Always: before every approval prompt.',
+    kind: 'select',
+    options: [
+      { value: 'unattended', label: 'Unattended runs' },
+      { value: 'always', label: 'Always' },
+      { value: 'off', label: 'Off' },
+    ],
+  },
   { section: 'safety', key: 'safety.checkpoints', label: 'File checkpoints', desc: 'Snapshot files before edits so /undo can restore them.', kind: 'toggle' },
   { section: 'safety', key: 'safety.redactSecrets', label: 'Redact secrets in tool output', kind: 'toggle' },
 

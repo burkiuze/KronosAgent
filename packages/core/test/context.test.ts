@@ -165,3 +165,30 @@ describe('stale-write guard', () => {
     expect((await tools.get('write_file')!.execute({ path: 'fresh.md', content: 'x' }, ctx)).isError).toBeFalsy();
   });
 });
+
+describe('guardian in unattended runs', () => {
+  it('lets a safety reviewer refuse a dangerous action nobody can approve', async () => {
+    const reviewed: string[] = [];
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (req.system.startsWith('You review one action')) {
+          reviewed.push(JSON.stringify(req.messages));
+          return { parts: [{ type: 'text', text: '{"risk_level":"high","user_authorization":"unknown","outcome":"deny","rationale":"force-pushing was never requested"}' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        }
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        step++;
+        if (step === 1) return { parts: [{ type: 'tool_call', id: 'c1', name: 'shell', input: { command: 'git push --force origin main' } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' };
+        return { parts: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const r = await env.rt.runHeadless('summarise the README', { autoApprove: true, mode: 'yolo', model: 'kronos:demo' });
+    expect(reviewed).toHaveLength(1);
+    expect(reviewed[0]).toContain('summarise the README');
+    expect(reviewed[0]).toContain('git push --force origin main');
+    const result = env.rt.sessions.messages(r.sessionId).flatMap((m) => m.parts).find((p) => p.type === 'tool_result') as { content: string; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/safety reviewer refused it \(high risk\): force-pushing was never requested/);
+  });
+});

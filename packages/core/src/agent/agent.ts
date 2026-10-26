@@ -26,6 +26,7 @@ import type { ToolContext, ToolDefinition } from '../tools/types.js';
 import { resolveRisk } from '../tools/types.js';
 import type { AgentDefinition } from './definitions.js';
 import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
+import { reviewAction } from '../safety/guardian.js';
 import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
 import { LoopWatch } from './watchdog.js';
@@ -433,7 +434,27 @@ export class Agent {
   // ---------------------------------------------------------------------------
 
   private async askPermission(req: Omit<PermissionRequest, 'requestId' | 'sessionId'>): Promise<PermissionDecision> {
-    const request: PermissionRequest = { ...req, requestId: newId('perm_'), sessionId: this.session.id };
+    let request: PermissionRequest = { ...req, requestId: newId('perm_'), sessionId: this.session.id };
+    const unattended = !this.opts.onPermission;
+    const guardian = this.rt.config.safety.guardian?.mode ?? 'off';
+    if (guardian === 'always' || (guardian === 'unattended' && unattended && this.opts.autoApprove)) {
+      try {
+        const v = await reviewAction(this.rt, {
+          messages: this.messages,
+          action: { tool: req.toolName, input: req.input, cwd: this.session.cwd, reason: req.reason ?? '' },
+          model: this.session.model || undefined,
+          signal: this.controller?.signal,
+        });
+        this.notice(v.outcome === 'allow' ? 'info' : 'warn', `Safety reviewer ${v.outcome === 'allow' ? 'approved' : 'refused'} ${req.summary} (${v.risk} risk, ${v.authorization} authorization): ${v.rationale}`);
+        if (v.outcome === 'allow') return { decision: 'allow' };
+        if (unattended) return { decision: 'deny', feedback: `The safety reviewer refused it (${v.risk} risk): ${v.rationale}` };
+        request = { ...request, reason: `${request.reason ?? ''} — safety reviewer: ${v.rationale}` };
+      } catch (e) {
+        log.warn('safety review failed', e);
+        // without a verdict, an unattended run only goes ahead with actions that are not dangerous
+        if (unattended && this.opts.autoApprove) return req.dangerous ? { decision: 'deny', feedback: `Not run: the safety review failed (${errorMessage(e)}) and the action is dangerous.` } : { decision: 'allow' };
+      }
+    }
     if (!this.opts.onPermission) {
       if (this.opts.autoApprove) return { decision: 'allow' };
       return { decision: 'deny', feedback: 'No one is available to approve this action in a non-interactive run.' };

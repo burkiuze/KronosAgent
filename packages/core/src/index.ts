@@ -36,6 +36,8 @@ export { serveMcp } from './mcp/server.js';
 export { createBackend, ProcessManager, type ExecBackend } from './backends/terminal.js';
 export { PermissionPolicy, ruleMatches } from './safety/permissions.js';
 export { detectDangerous, isReadOnlyCommand } from './safety/dangerous.js';
+export { reviewAction, parseVerdict, guardianTranscript, type GuardianVerdict } from './safety/guardian.js';
+export { parseShell, commandsOf } from './safety/shellparse.js';
 export { sendPlatformMessage, platformConfigured, chunkText, markdownToTelegramHtml, PLATFORM_LABELS, type PlatformId } from './messaging/senders.js';
 export { sendMail, type MailMessage } from './messaging/smtp.js';
 export { generateImage, textToSpeech, transcribe, imageProviderStatus } from './media/media.js';

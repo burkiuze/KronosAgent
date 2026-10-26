@@ -130,6 +130,11 @@ export interface KronosConfig {
     redactSecrets: boolean;
     checkpoints: boolean;
     protectedPaths: string[];
+    /**
+     * a second model decides on actions that would need approval: "unattended" when no person can
+     * answer (GitHub bot, automations, headless runs), "always" before every prompt, or "off"
+     */
+    guardian: { mode: 'off' | 'unattended' | 'always'; model: string | null };
   };
   memory: {
     enabled: boolean;
@@ -333,6 +338,7 @@ export function defaultConfig(): KronosConfig {
       redactSecrets: true,
       checkpoints: true,
       protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '~/.kronos/github-app.json', '~/.kronos/profiles/*/github-app.json', '/etc/shadow'],
+      guardian: { mode: 'unattended', model: null },
     },
     memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false },
     skills: { enabled: true, dirs: [], disabled: [], autoCreate: true, claudeCompat: true, editBudget: 3, staleAfterDays: 60 },
