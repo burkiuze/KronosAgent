@@ -198,11 +198,33 @@ export interface KronosConfig {
   };
   updates: { channel: 'stable' | 'beta'; autoCheck: boolean };
   telemetry: { enabled: boolean };
+  github: {
+    /** REST API root (GitHub Enterprise: https://ghe.example.com/api/v3) */
+    apiUrl: string;
+    webUrl: string;
+    /** personal access token; empty → the GitHub CLI's (`gh auth token`) */
+    token: string;
+    /** where repositories are cloned (default <profile>/repos) */
+    reposDir: string;
+    /** authenticate `git` in the agent's shell for GitHub remotes */
+    shellAuth: boolean;
+    /** answering @mentions on issues and pull requests (needs the Kronos GitHub App and a public URL) */
+    bot: {
+      enabled: boolean;
+      /** the mention that triggers it */
+      trigger: string;
+      /** author associations allowed to trigger it */
+      allowed: string[];
+      mode: PermissionMode;
+      model: string | null;
+      maxMinutes: number;
+    };
+  };
 }
 
 export const ALL_TOOLSETS = [
   'files', 'shell', 'web', 'browser', 'code', 'memory', 'sessions', 'todo', 'clarify', 'delegate', 'skills',
-  'cron', 'image', 'vision', 'voice', 'artifacts', 'messaging', 'http', 'mcp',
+  'cron', 'image', 'vision', 'voice', 'artifacts', 'messaging', 'http', 'mcp', 'github',
 ] as const;
 
 export function defaultConfig(): KronosConfig {
@@ -273,7 +295,7 @@ export function defaultConfig(): KronosConfig {
       workspaceOnly: false,
       redactSecrets: true,
       checkpoints: true,
-      protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '/etc/shadow'],
+      protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '~/.kronos/github-app.json', '~/.kronos/profiles/*/github-app.json', '/etc/shadow'],
     },
     memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false },
     skills: { enabled: true, dirs: [], disabled: [], autoCreate: true, claudeCompat: true, editBudget: 3, staleAfterDays: 60 },
@@ -311,6 +333,14 @@ export function defaultConfig(): KronosConfig {
     },
     updates: { channel: 'stable', autoCheck: true },
     telemetry: { enabled: false },
+    github: {
+      apiUrl: 'https://api.github.com',
+      webUrl: 'https://github.com',
+      token: '${GITHUB_TOKEN}',
+      reposDir: '',
+      shellAuth: true,
+      bot: { enabled: true, trigger: '@kronos', allowed: ['OWNER', 'MEMBER', 'COLLABORATOR'], mode: 'yolo', model: null, maxMinutes: 30 },
+    },
   };
 }
 

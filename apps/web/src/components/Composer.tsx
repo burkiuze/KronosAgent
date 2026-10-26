@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Brain, Check, ChevronDown, FilePen, FileText, Folder, Hand, ListChecks, Mic, MicOff, Paperclip, Plus, Square, X, Zap, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Brain, Check, ChevronDown, FilePen, FileText, Folder, FolderGit2, Hand, ListChecks, Mic, MicOff, Paperclip, Plus, Square, X, Zap, type LucideIcon } from 'lucide-react';
 import { get, api } from '../lib/api';
 import { chatOf, getState, loadSession, newChat, sendMessage, undoLast, setSessionMode, setState, stopRun, toast, useStore } from '../lib/store';
 import { updateConfig, useConfig } from '../lib/config';
@@ -383,6 +383,9 @@ export const Composer = memo(function Composer({ centered }: { centered?: boolea
                 </MenuItem>
                 <MenuItem icon={<Zap size={14} />} onClick={() => (close(), setText('/'), ref.current?.focus())}>
                   {t('composer.command')}
+                </MenuItem>
+                <MenuItem icon={<FolderGit2 size={14} />} onClick={() => (close(), setState({ repoPicker: true }))}>
+                  {t('composer.github')}
                 </MenuItem>
                 {centered && (
                   <>

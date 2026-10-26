@@ -60,6 +60,8 @@ export interface AppState {
   sidebarOpen: boolean;
   rightPanel: null | 'files' | 'terminal';
   settings: string | null;
+  /** the "Open a GitHub repository" picker */
+  repoPicker: boolean;
   paletteOpen: boolean;
   profilesOpen: boolean;
   toasts: Toast[];
@@ -99,6 +101,7 @@ let state: AppState = {
   sidebarOpen: loadPref('sidebarOpen', typeof window === 'undefined' || window.innerWidth > 900),
   rightPanel: loadPref('rightPanel', null),
   settings: null,
+  repoPicker: false,
   paletteOpen: false,
   profilesOpen: false,
   toasts: [],

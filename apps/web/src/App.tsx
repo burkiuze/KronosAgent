@@ -5,6 +5,7 @@ import { StatusBar } from './components/StatusBar';
 import { ChatView } from './components/ChatView';
 import { RightPanel } from './components/RightPanel';
 import { SettingsModal } from './components/Settings';
+import { RepoPicker } from './components/GitHub';
 import { CommandPalette } from './components/CommandPalette';
 import { Toasts } from './components/Toasts';
 import { SkillsPage } from './pages/Skills';
@@ -13,7 +14,7 @@ import { MessagingPage } from './pages/Messaging';
 import { AutomationsPage } from './pages/Automations';
 import { MemoryPage } from './pages/Memory';
 import { InsightsPage } from './pages/Insights';
-import { getState, newChat, onFinalText, savePref, setState, stopRun, useStore, type View } from './lib/store';
+import { getState, newChat, onFinalText, savePref, setState, stopRun, toast, useStore, type View } from './lib/store';
 import { useConfig } from './lib/config';
 import { speak, stopSpeaking } from './lib/voice';
 
@@ -68,6 +69,21 @@ export function App() {
   const desktop = (window as unknown as { kronosDesktop?: DesktopBridge }).kronosDesktop;
 
   useEffect(() => desktop?.onCommand?.(runDesktopCommand), []);
+
+  // back from GitHub after creating or installing the Kronos GitHub App
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const gh = url.searchParams.get('github');
+    if (!gh) return;
+    if (gh === 'created') toast(`GitHub App ${url.searchParams.get('app') ?? ''} created — now install it on your repositories`, 'ok');
+    else if (gh === 'installed') toast('Kronos GitHub App installed', 'ok');
+    else toast(`GitHub: ${url.searchParams.get('message') ?? 'something went wrong'}`, 'error');
+    setState({ settings: 'github' });
+    url.searchParams.delete('github');
+    url.searchParams.delete('app');
+    url.searchParams.delete('message');
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }, []);
 
   useEffect(() => {
     onFinalText((text) => void speak(text, config?.voice?.tts === 'openai' || config?.voice?.tts === 'elevenlabs' ? 'server' : 'browser'));
@@ -185,6 +201,7 @@ export function App() {
       {rightPanel && <RightPanel />}
       <StatusBar />
       <SettingsModal />
+      <RepoPicker />
       <CommandPalette />
       <Toasts />
     </div>

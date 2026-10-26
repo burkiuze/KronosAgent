@@ -57,8 +57,11 @@ export const shellTool: ToolDefinition<{ command: string; timeout?: number; cwd?
     const timeoutSec = Math.min(1800, input.timeout ?? rt.config.terminal.timeoutSec);
     let lastProgress = 0;
     let buffered = '';
+    // `git push`/`fetch` on a GitHub checkout authenticate with the connected account (never stored)
+    const env = rt.backend.name === 'local' && /\bgit\b/.test(input.command) ? await rt.github.shellEnv(cwd) : {};
     const r = await rt.backend.exec(input.command, {
       cwd,
+      env,
       timeoutMs: timeoutSec * 1000,
       signal: ctx.signal,
       onData: (chunk) => {

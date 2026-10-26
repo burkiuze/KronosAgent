@@ -59,6 +59,7 @@ export const TOOLSETS: ToolsetInfo[] = [
   { id: 'messaging', label: 'Messaging', description: 'Send messages to Telegram, Discord, Slack and other platforms.' },
   { id: 'http', label: 'HTTP', description: 'Call REST/GraphQL APIs.' },
   { id: 'mcp', label: 'MCP', description: 'Tools from connected Model Context Protocol servers.' },
+  { id: 'github', label: 'GitHub', description: 'Clone repositories, push branches, open pull requests, read and answer issues.' },
 ];
 
 export function resolveRisk<I extends Record<string, unknown>>(def: ToolDefinition<I>, input: I): ToolRisk {

@@ -51,6 +51,7 @@ ${c.bold('Manage')}
   kronos eval <suite.yaml> [--repeats N] [--model a,b] [--effort low,high] [--out report.json] [--trajectories dir]
   kronos cron [list|add|remove|run|pause|resume]            kronos memory [show|add|search|clear]
   kronos mcp [list|add|remove|serve]                        kronos pairing [list|approve <code>]
+  kronos github [status|repos [query]|clone <owner/repo>|login <token>|logout]
   kronos import <hermes|openclaw|claude|codex|cursor>       kronos insights [--days N]
   kronos doctor · kronos version · kronos update [--check]
 
@@ -155,6 +156,9 @@ export async function main(argv: string[]): Promise<void> {
       return withRt(args, (rt) => cmdConfig(rt, pos));
     case 'keys':
       return withRt(args, (rt) => cmdKeys(rt, pos));
+    case 'github':
+    case 'gh':
+      return withRt(args, (rt) => cmdGitHub(rt, pos));
     case 'skills':
     case 'skill':
       return withRt(args, (rt) => cmdSkills(rt, pos, args));
@@ -366,6 +370,53 @@ async function cmdConfig(rt: Kronos, pos: string[]): Promise<void> {
     }
     default:
       console.log(YAML.stringify(maskSecrets(rt.rawConfig)));
+  }
+}
+
+async function cmdGitHub(rt: Kronos, pos: string[]): Promise<void> {
+  const [sub, arg] = pos;
+  const gh = rt.github;
+  switch (sub) {
+    case 'repos': {
+      const list = await gh.repos(arg ?? '');
+      if (!list.length) console.log(c.gray('  No repositories — connect GitHub first (kronos github login <token>, or gh auth login).'));
+      for (const r of list.slice(0, 100)) console.log(`  ${r.fullName}${r.private ? c.gray(' private') : ''}${r.via === 'app' ? c.gray(' app') : ''}  ${c.gray(r.description.slice(0, 70))}`);
+      return;
+    }
+    case 'clone': {
+      if (!arg) throw new Error('usage: kronos github clone <owner/repo>');
+      const r = await gh.clone(arg);
+      console.log(`${c.green(sym.ok)} ${r.updated ? 'Updated' : 'Cloned'} ${arg} → ${r.path}`);
+      console.log(c.gray(`  start working there: kronos -C ${r.path}`));
+      return;
+    }
+    case 'login': {
+      let token = arg;
+      if (!token) {
+        const { createInterface } = await import('node:readline/promises');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        token = (await rl.question('GitHub token: ')).trim();
+        rl.close();
+      }
+      const me = await gh.request<{ login: string }>('GET', '/user', undefined, { token });
+      updateDotenv(join(rt.home, '.env'), { GITHUB_TOKEN: token });
+      console.log(`${c.green(sym.ok)} Connected to GitHub as ${me.login}`);
+      return;
+    }
+    case 'logout':
+      updateDotenv(join(rt.home, '.env'), { GITHUB_TOKEN: null });
+      console.log(`${c.green(sym.ok)} GitHub token removed`);
+      return;
+    default: {
+      const s = await gh.status();
+      console.log(s.user ? `  ${c.green('●')} ${s.user.login} ${c.gray(`via ${s.user.source === 'gh' ? 'the GitHub CLI' : 'a token'}`)}` : `  ${c.gray('○')} no personal token ${c.gray('(kronos github login <token>, or gh auth login)')}`);
+      console.log(
+        s.app
+          ? `  ${c.green('●')} GitHub App ${s.app.slug} ${c.gray(`installed on ${s.app.installations.map((i) => i.account).join(', ') || 'nothing yet'} · ${s.app.installUrl}`)}`
+          : `  ${c.gray('○')} no Kronos GitHub App ${c.gray('(create it in the app: Settings → GitHub)')}`,
+      );
+      if (s.error) console.log(c.yellow(`  ${s.error}`));
+    }
   }
 }
 

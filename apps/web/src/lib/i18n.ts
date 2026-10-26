@@ -113,6 +113,7 @@ const en: Dict = {
   'composer.attach': 'Attach files or images',
   'composer.mention': 'Mention a workspace file (@)',
   'composer.command': 'Run a skill or command (/)',
+  'composer.github': 'Open a GitHub repository',
   'composer.ctxTitle': '{p}% of the context window used',
   'sidebar.settings': 'Settings',
   'sidebar.chats': 'Chats',

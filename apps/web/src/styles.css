@@ -4243,3 +4243,143 @@ button.sb-item:hover,
   margin-left: auto;
   font-weight: 550;
 }
+
+/* ---------------------------------------------------------------- GitHub */
+
+.gh-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.gh-intro code,
+.gh-card code {
+  font-size: 0.9em;
+}
+
+.gh-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: var(--elev);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gh-card header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gh-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.9em;
+}
+
+.gh-row a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+}
+
+.gh-user img {
+  border-radius: 50%;
+}
+
+.gh-dim {
+  color: var(--dim);
+}
+
+.gh-error {
+  color: var(--danger, #d14);
+}
+
+.gh-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85em;
+  color: var(--dim);
+}
+
+.gh-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.gh-actions .input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.gh-actions a.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+}
+
+.repo-picker .modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.repo-search {
+  margin-bottom: 10px;
+}
+
+.repo-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  gap: 2px;
+}
+
+.repo-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.repo-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.repo-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 550;
+}
+
+.repo-desc {
+  color: var(--dim);
+  font-size: 0.85em;
+}
+
+.repo-empty {
+  padding: 18px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}

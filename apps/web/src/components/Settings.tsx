@@ -23,6 +23,7 @@ import {
   Trash2,
   RefreshCw,
   Search,
+  Github,
 } from 'lucide-react';
 import { api, del, downloadUrl, get, post, put } from '../lib/api';
 import { setState, toast, useStore } from '../lib/store';
@@ -32,6 +33,7 @@ import { t } from '../lib/i18n';
 import { Badge, Modal, Toggle } from './ui';
 import { KronosMark } from './Logo';
 import { ProviderConnect } from './ProviderConnect';
+import { GitHubSettings } from './GitHub';
 import type { McpStatus, ModelInfo } from '../lib/types';
 
 type Kind = 'toggle' | 'select' | 'number' | 'text' | 'textarea' | 'list' | 'model';
@@ -183,6 +185,7 @@ const SECTIONS: { id: string; label: string; icon: typeof Sparkles; group: numbe
   { id: 'gateway', label: 'Gateway', icon: Radio, group: 1 },
   { id: 'keys', label: 'Providers & API keys', icon: KeyRound, group: 1 },
   { id: 'tools', label: 'Skills & Tools', icon: Package, group: 1 },
+  { id: 'github', label: 'GitHub', icon: Github, group: 1 },
   { id: 'mcp', label: 'MCP', icon: Network, group: 1 },
   { id: 'about', label: 'About', icon: Info, group: 2 },
 ];
@@ -569,7 +572,7 @@ export function SettingsModal() {
   if (!section) return null;
   const close = () => setState({ settings: null });
   const defs = q ? matches : DEFS.filter((d) => d.section === section);
-  const custom = !q && ['appearance', 'keys', 'mcp', 'tools', 'about'].includes(section);
+  const custom = !q && ['appearance', 'keys', 'github', 'mcp', 'tools', 'about'].includes(section);
   const meta = SECTIONS.find((s) => s.id === section);
   return (
     <Modal open onClose={close} className="settings-modal" wide>
@@ -634,6 +637,8 @@ export function SettingsModal() {
                 <Appearance config={config} />
               ) : section === 'keys' ? (
                 <Keys />
+              ) : section === 'github' ? (
+                <GitHubSettings />
               ) : section === 'mcp' ? (
                 <Mcp />
               ) : section === 'tools' ? (

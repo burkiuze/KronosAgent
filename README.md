@@ -7,7 +7,7 @@
 **One self-improving agent for your terminal, your desktop and every chat app you use.**
 It codes, researches, automates and remembers — with any model, on your machine.
 
-[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Research](docs/RESEARCH.md) · [Türkçe](#türkçe)
+[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [GitHub](docs/GITHUB.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Research](docs/RESEARCH.md) · [Türkçe](#türkçe)
 
 <img src="docs/assets/chat-dark.png" alt="Kronos desktop: chat with tool calls, live plan and the files panel" width="900" />
 
@@ -87,6 +87,11 @@ fallbacks), OpenAI, Google Gemini, OpenRouter, Groq, DeepSeek, Mistral, xAI, NVI
 Portal, Together, Fireworks, Cerebras, Moonshot, Z.ai, **Ollama** and **LM Studio** locally, and
 any OpenAI-compatible endpoint as a custom provider. Switch models mid-conversation; use a
 cheaper model for subagents.
+
+**GitHub, like a teammate.** Connect your account or create the Kronos GitHub App in one click
+(Settings → GitHub): Kronos clones your repositories, branches, commits, pushes and opens pull
+requests; reads issues, reviews and CI; and with the app installed, answers `@kronos` in issues
+and pull requests — with a pull request when it changed code. [Setup guide](docs/GITHUB.md).
 
 A **repository map** (`repo_map`) shows the agent where everything lives in one call — files
 ranked by how much other code depends on them, with every class, function and method signature.

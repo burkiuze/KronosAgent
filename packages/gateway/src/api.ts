@@ -170,6 +170,49 @@ export function buildApi(gw: Gateway): Router {
     }
     return { ...result, saved: result.ok };
   });
+  // ---------------------------------------------------------------- GitHub
+  r.get('/api/github/status', () => rt().github.status());
+  /** Connect with a personal access token: checked against GitHub, then kept in .env (never in config). */
+  r.post('/api/github/token', async (req) => {
+    const { token } = await req.body<{ token: string }>();
+    if (!token?.trim()) throw new HttpError(400, 'token is required');
+    const me = await rt().github.request<{ login: string }>('GET', '/user', undefined, { token: token.trim() }).catch((e: Error) => {
+      throw new HttpError(400, `GitHub rejected the token: ${e.message}`);
+    });
+    updateDotenv(join(rt().home, '.env'), { GITHUB_TOKEN: token.trim() });
+    rt().reload();
+    rt().github.resetCache();
+    return { ok: true, login: me.login };
+  });
+  r.delete('/api/github/token', () => {
+    updateDotenv(join(rt().home, '.env'), { GITHUB_TOKEN: null });
+    rt().reload();
+    rt().github.resetCache();
+    return { ok: true };
+  });
+  /** The manifest for creating the Kronos GitHub App; the UI posts it to GitHub. */
+  r.post('/api/github/app/manifest', async (req) => {
+    const b = await req.body<{ baseUrl: string; publicUrl?: string; org?: string; name?: string }>();
+    if (!/^https?:\/\//.test(b.baseUrl ?? '')) throw new HttpError(400, 'baseUrl is required');
+    if (b.publicUrl !== undefined && b.publicUrl !== (rt().config.gateway.publicUrl ?? '')) rt().updateConfig({ gateway: { publicUrl: b.publicUrl.trim() } });
+    return rt().github.createManifest({ baseUrl: b.baseUrl, publicUrl: b.publicUrl, org: b.org?.trim() || undefined, name: b.name?.trim() || undefined });
+  });
+  r.delete('/api/github/app', () => {
+    rt().github.removeApp();
+    return { ok: true };
+  });
+  r.get('/api/github/repos', (req) => rt().github.repos(req.query.get('q') ?? ''));
+  /** Clone a repository and start a chat in it. */
+  r.post('/api/github/clone', async (req) => {
+    const b = await req.body<{ repo: string; branch?: string }>();
+    const k = rt();
+    const cloned = await k.github.clone(b.repo, { branch: b.branch?.trim() || undefined }).catch((e: Error) => {
+      throw new HttpError((e as { status?: number }).status === 401 ? 401 : 400, e.message);
+    });
+    const s = k.createSession({ source: 'desktop', title: b.repo, cwd: cloned.path });
+    return { path: cloned.path, updated: cloned.updated, session: sessionSummary(s) };
+  });
+
   r.get('/api/models', async (req) => {
     const p = req.query.get('provider') ?? undefined;
     return { models: await rt().providers.listModels(p), default: rt().providers.resolve(), aliases: modelAliases() };

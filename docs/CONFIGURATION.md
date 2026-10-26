@@ -212,6 +212,19 @@ Kronos reads instruction files from the working directory up to the repository r
 instructions. Project-specific skills, agents and commands live in `.kronos/skills`,
 `.kronos/agents` and `.kronos/commands`.
 
+## GitHub
+
+| Key | Default | Description |
+|---|---|---|
+| `github.token` | `${GITHUB_TOKEN}` | Personal access token; empty → the GitHub CLI's (`gh auth token`). Set from Settings → GitHub or `kronos github login`. |
+| `github.apiUrl` / `github.webUrl` | `https://api.github.com` / `https://github.com` | GitHub Enterprise: your server's API and web URLs. |
+| `github.reposDir` | `''` | Where repositories are cloned (default `<profile>/repos`). |
+| `github.shellAuth` | `true` | Authenticate `git` in the agent's shell for GitHub checkouts. |
+| `github.bot` | `{enabled: true, trigger: '@kronos', allowed: [OWNER, MEMBER, COLLABORATOR], mode: yolo, model: null, maxMinutes: 30}` | Answering mentions in issues and pull requests (needs the Kronos GitHub App and `gateway.publicUrl`). |
+
+The Kronos GitHub App's credentials live in `<profile>/github-app.json` (mode 600). See
+[GITHUB.md](GITHUB.md).
+
 ## Environment variables
 
 | Variable | Purpose |

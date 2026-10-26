@@ -94,6 +94,16 @@ Key properties:
      the app under "Show earlier messages".
   3. *Trim* — if the summary call fails, the recent turns are kept and the rest is archived with
      a note, so the user's task continues instead of failing.
+- **GitHub** (`github/`, `gateway/src/github.ts`): `GitHubService` holds the identities — a
+  personal token (`GITHUB_TOKEN` or the GitHub CLI's) and the Kronos GitHub App (created from a
+  manifest in one click; RS256 app JWTs → hour-long installation tokens, cached) — and picks the
+  app's token for repositories it is installed on, the user's otherwise. git gets tokens per
+  command as an `http.extraheader` via `GIT_CONFIG_*` env (never on disk or a command line); the
+  agent's shell gets the same for GitHub checkouts. The `github` tool (clone, push, create_pr, pr,
+  diff, review_comments, issues, comment, checks …) infers the repository from `origin`. The bot
+  (`/hooks/github`, HMAC-verified, deduplicated, serialized per repository) turns `@kronos` from
+  owners/members/collaborators into a run in a dedicated checkout and a pushed branch, a pull
+  request and an edited reply. See [GITHUB.md](GITHUB.md).
 - **Repository map** (`repo_map`, `tools/repomap.ts`): the most important source files with
   their classes, functions, types and methods as `line: signature`, for ~20 languages. Files are
   ranked by how many other files use their symbols (tests and examples last), `focus` (paths or

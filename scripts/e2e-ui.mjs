@@ -14,7 +14,7 @@ import { Gateway } from '@kronos/gateway';
 // CommonJS resolution so a globally installed playwright (NODE_PATH) works too
 const { chromium } = createRequire(import.meta.url)('playwright');
 
-for (const k of Object.keys(process.env)) if (/_API_KEY$|^ANTHROPIC_AUTH_TOKEN$/.test(k)) delete process.env[k];
+for (const k of Object.keys(process.env)) if (/_API_KEY$|^ANTHROPIC_AUTH_TOKEN$|^GITHUB_TOKEN$|^GH_TOKEN$/.test(k)) delete process.env[k];
 const home = mkdtempSync(join(tmpdir(), 'kronos-e2e-home-'));
 const ws = mkdtempSync(join(tmpdir(), 'kronos-e2e-ws-'));
 writeFileSync(join(ws, 'README.md'), '# e2e workspace\n\nHello from the Kronos e2e test.\n');
@@ -28,7 +28,8 @@ const rt = await Kronos.create({
   cwd: ws,
   connectMcp: false,
   logLevel: 'silent',
-  overrides: { model: { default: 'kronos:demo' }, safety: { mode: 'yolo' }, skills: { claudeCompat: false } },
+  // no real GitHub account (env token or a logged-in gh CLI) may leak into the test
+  overrides: { model: { default: 'kronos:demo' }, safety: { mode: 'yolo' }, skills: { claudeCompat: false }, github: { token: '', webUrl: 'https://github.invalid', apiUrl: 'http://127.0.0.1:9' } },
 });
 // a fake OpenAI-compatible API so the provider "connect" flow can be exercised offline
 const fakeApi = createServer((req, res) => {
@@ -184,6 +185,18 @@ try {
     await page.locator('.composer-bar .cbtn[class*="mode-"]').click();
     await page.locator('.mode-option', { hasText: 'Plan mode' }).click();
     await page.locator('.composer-bar .cbtn.mode-plan').waitFor({ timeout: 5000 });
+  });
+  await check('opens a GitHub repository from the composer, or asks to connect GitHub', async () => {
+    await page.locator('.composer-bar .cbtn.icon').first().click();
+    await page.locator('.menu-item', { hasText: 'Open a GitHub repository' }).click();
+    await page.locator('.repo-picker').waitFor({ timeout: 5000 });
+    await page.locator('.repo-picker .btn.primary', { hasText: 'Connect GitHub' }).waitFor({ timeout: 10000 });
+    if (shots) await page.screenshot({ path: join(shots, 'github-picker.png') });
+    await page.locator('.repo-picker .btn.primary', { hasText: 'Connect GitHub' }).click();
+    await page.locator('.settings-nav-item.active', { hasText: 'GitHub' }).waitFor({ timeout: 5000 });
+    await page.locator('.gh-card .btn.primary', { hasText: 'Create the GitHub App' }).waitFor({ timeout: 5000 });
+    if (shots) await page.screenshot({ path: join(shots, 'github-settings.png') });
+    await page.keyboard.press('Escape');
   });
   await check('compaction keeps recent turns and earlier messages stay readable', async () => {
     await send('/compact');

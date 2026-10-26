@@ -12,6 +12,7 @@ import { buildOpenAIRoutes } from './openai.js';
 import { attachTerminal } from './terminal.js';
 import { readBody, sendJson, serveStatic, type Router } from './http.js';
 import { PlatformManager } from './platforms/manager.js';
+import { GitHubBot } from './github.js';
 import type { WhatsAppAdapter } from './platforms/others.js';
 
 const log = logger('gateway');
@@ -60,6 +61,7 @@ export class Gateway {
   rt: Kronos;
   readonly hub: Hub;
   readonly platforms: PlatformManager;
+  readonly github: GitHubBot;
   readonly core = core;
   server!: Server;
   url = '';
@@ -75,6 +77,7 @@ export class Gateway {
     this.opts = opts;
     this.hub = new Hub(rt);
     this.platforms = new PlatformManager(() => this.rt);
+    this.github = new GitHubBot(() => this.rt);
     const host = opts.host ?? rt.config.gateway.host;
     this.token = opts.token ?? rt.config.gateway.token ?? '';
     if (!this.token && !isLoopback(host)) {
@@ -204,6 +207,7 @@ export class Gateway {
   }
 
   private async hooks(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    if (url.pathname.startsWith('/hooks/github') && (await this.github.handle(req, res, url))) return;
     const cfg = this.rt.config.platforms;
     if (url.pathname === '/hooks/whatsapp') {
       if (!cfg.whatsapp.enabled) return sendJson(res, 404, { error: 'whatsapp platform disabled' });
