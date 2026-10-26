@@ -31,6 +31,7 @@ import { describeHit } from '../safety/osv.js';
 import { deferredTools } from '../tools/toolsearch.js';
 import { LEARNING_REVIEWER, hasLearningSignal } from './learning.js';
 import { checkRun, isNonCodePath } from './evidence.js';
+import { injectionNote, scanThreats } from '../safety/threats.js';
 import { recapTranscript } from '../memory/recaps.js';
 import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
@@ -63,6 +64,9 @@ const LEAN_TOOLS = new Set(['tool_search', 'repo_map', 'read_file', 'write_file'
 
 /** tools whose results get a syntax check of the files they changed */
 const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);
+
+/** tools whose output comes from outside the user's control */
+const UNTRUSTED_TOOLS = /^(web_fetch|web_search|http_request|http|browser|github|mcp__.+)$/;
 
 export interface AgentOptions {
   runtime: Kronos;
@@ -316,6 +320,7 @@ export class Agent {
       checks: detectProjectChecks(this.session.cwd),
       team: this.opts.team ? { member: this.opts.team.member, teammates: this.opts.team.board.members.filter((m) => m !== this.opts.team!.member) } : undefined,
       lean,
+      modelFamily: model.ref,
     });
     this.saveSession({ systemPrompt: prompt, toolNames: this.tools.map((t) => t.name), meta: { lean } });
   }
@@ -1099,6 +1104,11 @@ export class Agent {
         checkNote = `\n\nNote: this exit status is ${run.maskedBy === '|| true' ? 'forced to 0 by `|| true`' : `the one of \`${run.maskedBy ?? 'the last command'}\`, not of the ${run.kind}`} — it does not show whether the ${run.kind} passed. Read the output above, or re-run with \`set -o pipefail;\` or without the pipe.`;
     }
     let content = (out.content ?? '') + checkNote;
+    // untrusted content (web pages, API responses, MCP servers) that tries to instruct the agent is flagged
+    if (!out.isError && UNTRUSTED_TOOLS.test(call.name) && content.length > 40) {
+      const threats = scanThreats(content, 'context');
+      if (threats.length) content += injectionNote(threats);
+    }
     if (this.rt.config.safety.redactSecrets) content = redactSecrets(content);
     const limit = this.rt.config.agent.toolOutputLimit;
     let meta = out.meta;

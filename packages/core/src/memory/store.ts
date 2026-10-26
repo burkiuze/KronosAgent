@@ -1,3 +1,4 @@
+import { scanThreats } from '../safety/threats.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { Bm25Index } from '../util/bm25.js';
@@ -124,6 +125,9 @@ export class MemoryStore {
   add(target: MemoryTarget, content: string, sessionId?: string): MemoryResult {
     const text = content.trim();
     if (!text) return { ok: false, message: 'content is empty' };
+    // memory enters every future system prompt: nothing that reads like an injection gets in
+    const threats = scanThreats(text, 'strict');
+    if (threats.length) return { ok: false, message: `Not saved: the entry looks like a prompt injection (${threats.join(', ')}). Memory holds facts, not instructions from untrusted content.` };
     const entries = this.entries(target);
     if (entries.some((e) => e === text)) return { ok: true, message: 'Already remembered.', entries };
     const next = [...entries, text];
@@ -134,6 +138,8 @@ export class MemoryStore {
   }
 
   patch(target: MemoryTarget, oldText: string, content: string, sessionId?: string): MemoryResult {
+    const threats = scanThreats(content, 'strict');
+    if (threats.length) return { ok: false, message: `Not saved: the entry looks like a prompt injection (${threats.join(', ')}).` };
     const entries = this.entries(target);
     const { index, error } = this.findOne(entries, oldText);
     if (error) return { ok: false, message: error };
