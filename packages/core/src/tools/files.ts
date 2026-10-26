@@ -6,6 +6,7 @@ import { resolvePath } from '../config/paths.js';
 import { decodeText, looksBinary, numberLines, truncate } from '../util/text.js';
 import { unifiedDiff, diffStats, parsePatch, applyHunks } from '../util/diff.js';
 import { walk, matchGlob, globToRegExp } from '../util/glob.js';
+import { alreadyApplied, locateEdit } from '../util/editmatch.js';
 import { runProcess, which } from '../util/process.js';
 
 const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
@@ -140,59 +141,33 @@ export const writeFileTool: ToolDefinition<{ path: string; content: string }> = 
   },
 };
 
-function normalizeWs(s: string): string {
-  return s
-    .split('\n')
-    .map((l) => l.replace(/\s+$/, ''))
-    .join('\n');
-}
-
-/** Find `old` in `src`; tolerate trailing-whitespace and indentation drift when the exact text is absent. */
-function locate(src: string, old: string): { start: number; end: number; count: number } | { error: string } {
-  const count = old ? src.split(old).length - 1 : 0;
-  if (count >= 1) {
-    const start = src.indexOf(old);
-    return { start, end: start + old.length, count };
-  }
-  // fuzzy: compare line-by-line ignoring trailing whitespace and leading indentation
-  const srcLines = src.split('\n');
-  const oldLines = normalizeWs(old).split('\n');
-  const trimmed = oldLines.map((l) => l.trim());
-  const matches: number[] = [];
-  for (let i = 0; i <= srcLines.length - oldLines.length; i += 1) {
-    let okm = true;
-    for (let j = 0; j < oldLines.length; j += 1) {
-      if ((srcLines[i + j] as string).trim() !== trimmed[j]) {
-        okm = false;
-        break;
-      }
-    }
-    if (okm) matches.push(i);
-  }
-  if (matches.length === 1) {
-    const i = matches[0] as number;
-    const start = srcLines.slice(0, i).join('\n').length + (i > 0 ? 1 : 0);
-    const end = start + srcLines.slice(i, i + oldLines.length).join('\n').length;
-    return { start, end, count: 1 };
-  }
-  if (matches.length > 1) return { error: `old_string matches ${matches.length} places (ignoring whitespace); add surrounding lines to make it unique.` };
-  // help the model recover: show the closest line
-  const first = trimmed.find((l) => l.length > 3) ?? '';
-  const idx = srcLines.findIndex((l) => first && l.includes(first.slice(0, Math.min(40, first.length))));
-  const hint = idx >= 0 ? `\nClosest match near line ${idx + 1}:\n${numberLines(srcLines.slice(Math.max(0, idx - 2), idx + 5).join('\n'), Math.max(1, idx - 1))}` : '';
-  return { error: `old_string was not found in the file. Re-read the file and copy the exact text (including indentation).${hint}` };
-}
-
-function applyEdit(src: string, old: string, next: string, replaceAll?: boolean): string | { error: string } {
+/** Where `old` is in the file — with Hermes-style fallbacks for slightly-off copies — and a hint when it is not. */
+function applyEdit(src: string, old: string, next: string, replaceAll?: boolean): { text: string; note?: string; noop?: boolean } | { error: string } {
   if (old === next) return { error: 'old_string and new_string are identical' };
-  if (replaceAll) {
-    if (!src.includes(old)) return { error: 'old_string was not found in the file' };
-    return src.split(old).join(next);
-  }
-  const loc = locate(src, old);
+  const loc = locateEdit(src, old, next);
   if ('error' in loc) return loc;
-  if (loc.count > 1) return { error: `old_string occurs ${loc.count} times. Add more context to make it unique, or set replace_all: true.` };
-  return src.slice(0, loc.start) + next + src.slice(loc.end);
+  const matches = loc.matches;
+  if (!matches.length) {
+    if (alreadyApplied(src, old, next)) return { text: src, noop: true, note: 'already applied: new_string is in the file and old_string is not' };
+    const srcLines = src.split('\n');
+    const first = old.split('\n').map((l) => l.trim()).find((l) => l.length > 3) ?? '';
+    const idx = srcLines.findIndex((l) => first && l.includes(first.slice(0, Math.min(40, first.length))));
+    const hint = idx >= 0 ? `\nClosest match near line ${idx + 1}:\n${numberLines(srcLines.slice(Math.max(0, idx - 2), idx + 5).join('\n'), Math.max(1, idx - 1))}` : '';
+    return { error: `old_string was not found in the file. Re-read the file and copy the exact text (including indentation).${hint}` };
+  }
+  if (replaceAll) {
+    if (matches[0]!.strategy === 'by_first_and_last_line') return { error: 'old_string only approximately matches; replace_all needs exact text.' };
+    let out = '';
+    let pos = 0;
+    for (const m of matches) {
+      out += src.slice(pos, m.start) + m.replacement;
+      pos = m.end;
+    }
+    return { text: out + src.slice(pos), note: matches[0]!.note };
+  }
+  if (matches.length > 1) return { error: `old_string matches ${matches.length} places${matches[0]!.strategy === 'exact' ? '' : ` (${matches[0]!.strategy.replace(/_/g, ' ')})`}. Add surrounding lines to make it unique, or set replace_all: true.` };
+  const m = matches[0]!;
+  return { text: src.slice(0, m.start) + m.replacement + src.slice(m.end), note: m.note };
 }
 
 export const editFileTool: ToolDefinition<{ path: string; old_string: string; new_string: string; replace_all?: boolean }> = {
@@ -224,9 +199,10 @@ export const editFileTool: ToolDefinition<{ path: string; old_string: string; ne
     }
     const src = readFileSync(path, 'utf8');
     const res = applyEdit(src, input.old_string, input.new_string, input.replace_all);
-    if (typeof res !== 'string') return fail(res.error);
-    const meta = writeWithDiff(ctx, path, res, src);
-    return ok(`Edited ${rel(ctx, path)} (+${meta?.added ?? 0} −${meta?.removed ?? 0})`, meta);
+    if ('error' in res) return fail(res.error);
+    if (res.noop) return ok(`No change: ${res.note}.`, { path });
+    const meta = writeWithDiff(ctx, path, res.text, src);
+    return ok(`Edited ${rel(ctx, path)} (+${meta?.added ?? 0} −${meta?.removed ?? 0})${res.note ? ` — ${res.note}` : ''}`, meta);
   },
 };
 
@@ -257,13 +233,15 @@ export const multiEditTool: ToolDefinition<{ path: string; edits: { old_string: 
     if (!existsSync(path)) return fail(`File not found: ${input.path}`);
     const src = readFileSync(path, 'utf8');
     let cur = src;
+    const notes: string[] = [];
     for (const [i, e] of input.edits.entries()) {
       const r = applyEdit(cur, e.old_string, e.new_string, e.replace_all);
-      if (typeof r !== 'string') return fail(`Edit ${i + 1} failed: ${r.error}\nNo changes were written.`);
-      cur = r;
+      if ('error' in r) return fail(`Edit ${i + 1} failed: ${r.error}\nNo changes were written.`);
+      if (r.note) notes.push(`edit ${i + 1}: ${r.note}`);
+      cur = r.text;
     }
     const meta = writeWithDiff(ctx, path, cur, src);
-    return ok(`Applied ${input.edits.length} edits to ${rel(ctx, path)} (+${meta?.added ?? 0} −${meta?.removed ?? 0})`, meta);
+    return ok(`Applied ${input.edits.length} edits to ${rel(ctx, path)} (+${meta?.added ?? 0} −${meta?.removed ?? 0})${notes.length ? `\n${notes.join('\n')}` : ''}`, meta);
   },
 };
 
