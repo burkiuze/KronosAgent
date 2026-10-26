@@ -26,6 +26,9 @@ export class McpManager {
   private clients = new Map<string, McpClient>();
   private states = new Map<string, McpServerStatus>();
 
+  /** refuses to launch a server whose package is known malware (set by the runtime) */
+  malwareCheck?: (commandLine: string) => Promise<string | null>;
+
   constructor(private registry: ToolRegistry) {}
 
   status(): McpServerStatus[] {
@@ -56,6 +59,15 @@ export class McpManager {
   async connect(name: string, cfg: McpServerConfig, timeoutMs = 20_000): Promise<McpServerStatus> {
     const state: McpServerStatus = { name, transport: cfg.url ? 'http' : 'stdio', status: 'connecting', tools: [] };
     this.states.set(name, state);
+    if (cfg.command && this.malwareCheck) {
+      const blocked = await this.malwareCheck([cfg.command, ...(cfg.args ?? [])].map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')).catch(() => null);
+      if (blocked) {
+        state.status = 'error';
+        state.error = `Not started: ${blocked}`;
+        log.warn(`MCP server ${name} blocked: ${blocked}`);
+        return state;
+      }
+    }
     const client = new McpClient(name, cfg);
     try {
       await withTimeout(client.connect(), timeoutMs, `MCP ${name} initialize`);

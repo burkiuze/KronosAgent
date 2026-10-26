@@ -144,6 +144,8 @@ export interface KronosConfig {
      * a second model decides on actions that would need approval: "unattended" when no person can
      * answer (GitHub bot, automations, headless runs), "always" before every prompt, or "off"
      */
+    /** refuse to install or run packages with a malware advisory in the OSV database (npm, PyPI) */
+    malwareCheck: boolean;
     guardian: { mode: 'off' | 'unattended' | 'always'; model: string | null; /** extra trusted rules for the reviewer */ policy: string };
   };
   memory: {
@@ -359,6 +361,7 @@ export function defaultConfig(): KronosConfig {
       redactSecrets: true,
       checkpoints: true,
       protectedPaths: ['~/.ssh/**', '~/.aws/credentials', '~/.kronos/.env', '~/.kronos/github-app.json', '~/.kronos/profiles/*/github-app.json', '/etc/shadow'],
+      malwareCheck: true,
       guardian: { mode: 'unattended', model: null, policy: '' },
     },
     memory: { enabled: true, memoryCharLimit: 4000, userCharLimit: 2500, sessionSearch: true, autoExtract: false, recaps: false },

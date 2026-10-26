@@ -27,6 +27,7 @@ import { resolveRisk } from '../tools/types.js';
 import type { AgentDefinition } from './definitions.js';
 import { buildSystemPrompt, discoverContextFiles } from './prompt.js';
 import { reviewAction } from '../safety/guardian.js';
+import { describeHit } from '../safety/osv.js';
 import { deferredTools } from '../tools/toolsearch.js';
 import { LEARNING_REVIEWER, hasLearningSignal } from './learning.js';
 import { recapTranscript } from '../memory/recaps.js';
@@ -997,6 +998,13 @@ export class Agent {
       if (check.action === 'deny') {
         fail(`Permission denied: ${check.reason}`);
         continue;
+      }
+      if ((call.name === 'shell' || call.name === 'process') && this.rt.config.safety.malwareCheck !== false && typeof input.command === 'string') {
+        const hit = await this.rt.osv.checkCommand(input.command);
+        if (hit) {
+          fail(`Blocked: ${describeHit(hit)}. Do not install or run it; check the package name for a typo and use the genuine package.`);
+          continue;
+        }
       }
       if (check.action === 'ask') {
         const decision = await this.askPermission({ toolCallId: call.id, toolName: call.name, input, summary, risk, reason: check.reason, dangerous: check.dangerous });

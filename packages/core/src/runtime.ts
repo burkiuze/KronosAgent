@@ -19,6 +19,7 @@ import { toolSearchTool } from './tools/toolsearch.js';
 import { SessionRecaps } from './memory/recaps.js';
 import { LspManager } from './tools/lsp.js';
 import { KernelManager } from './tools/kernel.js';
+import { OsvChecker, describeHit } from './safety/osv.js';
 import { validateValue } from './util/schema.js';
 import type { ToolDefinition } from './tools/types.js';
 import { shellTools } from './tools/shell.js';
@@ -129,6 +130,7 @@ export class Kronos {
   recaps!: SessionRecaps;
   readonly lsp = new LspManager();
   readonly kernels = new KernelManager();
+  osv!: OsvChecker;
   messaging?: MessagingBridge;
   private agents = new Map<string, Agent>();
   private background = new Set<Promise<unknown>>();
@@ -159,6 +161,12 @@ export class Kronos {
     k.backend = createBackend(k.config.terminal, k.workspace());
     if (proxiedNetwork(k.config.terminal.sandbox)) void ensureNetworkProxy(k.config.terminal.sandbox).catch((e) => log.warn('network proxy failed to start', e));
     k.mcp = new McpManager(k.tools);
+    k.osv = new OsvChecker(join(k.paths.root, 'cache', 'osv.json'));
+    k.mcp.malwareCheck = async (line) => {
+      if (k.config.safety.malwareCheck === false) return null;
+      const hit = await k.osv.checkCommand(line);
+      return hit ? describeHit(hit) : null;
+    };
     k.github = new GitHubService(k);
     k.review = new ReviewEngine(k);
     k.recaps = new SessionRecaps(k);
