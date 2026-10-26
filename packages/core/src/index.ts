@@ -59,5 +59,7 @@ export { configureLogger, logger } from './util/log.js';
 export const KRONOS_VERSION = '1.0.0';
 export * from './review/index.js';
 export { SessionRecaps, recapTranscript } from './memory/recaps.js';
+export { parseStructured } from './runtime.js';
+export { validateValue } from './util/schema.js';
 export { detectSandbox, wrapCommand, writableRoots, seatbeltProfile, describeSandbox, projectRoot, type SandboxConfig } from './backends/sandbox.js';
 export { GitHubService, GitHubError, parseGitHubRemote, type GitHubAppCredentials, type GitHubRepo, type GitHubStatus } from './github/github.js';

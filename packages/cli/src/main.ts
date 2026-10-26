@@ -39,6 +39,7 @@ const HELP = `${c.bold('KRONOS AGENT')} v${KRONOS_VERSION} — the self-improvin
 ${c.bold('Usage')}
   kronos [prompt]                 interactive session (optionally start with a prompt)
   kronos run "<prompt>"           one-shot, non-interactive run (prints the answer)
+                                  [--output-schema schema.json] [--output-last-message f] [--events] [-c] [--ephemeral]
   kronos web                      start the gateway and open the desktop UI in your browser
   kronos desktop                  launch the Kronos desktop app
   kronos gateway                  run the gateway: desktop/web backend, messaging, cron, API
@@ -247,11 +248,31 @@ async function cmdRun(args: ParsedArgs, pos: string[]): Promise<void> {
   }
   const rt = await makeRuntime(args);
   const json = Boolean(args.flags.json);
-  const renderer = json ? undefined : new EventRenderer({ verbose: Boolean(args.flags.verbose), showThinking: false, write: (s) => process.stderr.write(s) });
+  // --events: every agent event as one JSON line (Codex `exec --json`)
+  const events = Boolean(args.flags.events);
+  const schemaFile = flagStr(args, 'output-schema');
+  let outputSchema: Record<string, unknown> | undefined;
+  if (schemaFile) {
+    try {
+      outputSchema = JSON.parse(readFileSync(schemaFile, 'utf8')) as Record<string, unknown>;
+    } catch (e) {
+      console.error(c.red(`${sym.fail} cannot read the output schema ${schemaFile}: ${(e as Error).message}`));
+      process.exitCode = 2;
+      await rt.close();
+      return;
+    }
+  }
+  const quietText = json || events || Boolean(outputSchema);
+  const renderer = json || events ? undefined : new EventRenderer({ verbose: Boolean(args.flags.verbose), showThinking: false, write: (s) => process.stderr.write(s) });
   let streamedText = '';
   const onEvent = (e: AgentEvent) => {
+    if (events) {
+      if (e.type !== 'text_delta' && e.type !== 'thinking_delta') process.stdout.write(`${JSON.stringify(e)}\n`);
+      return;
+    }
     if (json) return;
     if (e.type === 'text_delta') {
+      if (quietText) return;
       process.stdout.write(e.text);
       streamedText += e.text;
       return;
@@ -265,8 +286,9 @@ async function cmdRun(args: ParsedArgs, pos: string[]): Promise<void> {
   const ctl = new AbortController();
   process.on('SIGINT', () => ctl.abort());
   try {
+    const sessionId = flagStr(args, 'session') ?? (args.flags.continue ? rt.sessions.list({ limit: 1, source: 'cli' })[0]?.id : undefined);
     const res = await rt.runHeadless(prompt, {
-      sessionId: flagStr(args, 'session'),
+      sessionId,
       model: flagStr(args, 'model'),
       mode: modeFrom(args) ?? (rt.config.safety.mode === 'ask' ? 'auto-edit' : rt.config.safety.mode),
       source: 'cli',
@@ -274,13 +296,24 @@ async function cmdRun(args: ParsedArgs, pos: string[]): Promise<void> {
       preloadSkills: flagStr(args, 'skill')?.split(','),
       signal: ctl.signal,
       onEvent,
+      outputSchema,
     });
-    if (json) console.log(JSON.stringify({ text: res.text, stopReason: res.stopReason, sessionId: res.sessionId, usage: res.usage, durationMs: res.durationMs, error: res.error }, null, 2));
-    else {
+    const out = res as typeof res & { output?: unknown; schemaErrors?: string[] };
+    const lastMessage = outputSchema && out.output !== undefined ? JSON.stringify(out.output, null, 2) : res.text;
+    const lastFile = flagStr(args, 'output-last-message');
+    if (lastFile) writeFileSync(lastFile, `${lastMessage}\n`);
+    if (json) console.log(JSON.stringify({ text: res.text, output: out.output, schemaErrors: out.schemaErrors, stopReason: res.stopReason, sessionId: res.sessionId, usage: res.usage, durationMs: res.durationMs, error: res.error }, null, 2));
+    else if (events) process.stdout.write(`${JSON.stringify({ type: 'result', text: res.text, output: out.output, schemaErrors: out.schemaErrors, stopReason: res.stopReason, sessionId: res.sessionId, usage: res.usage, error: res.error })}\n`);
+    else if (outputSchema) {
+      if (out.output !== undefined) console.log(JSON.stringify(out.output, null, 2));
+      else console.error(c.red(`${sym.fail} the answer did not match the schema: ${(out.schemaErrors ?? []).join('; ')}`));
+    } else {
       if (!streamedText.endsWith('\n')) process.stdout.write('\n');
       if (res.error) console.error(c.red(`${sym.fail} ${res.error}`));
     }
-    if (res.stopReason === 'error') process.exitCode = 1;
+    if (res.stopReason === 'error' || (outputSchema && out.output === undefined)) process.exitCode = 1;
+    // --ephemeral: leave no session behind
+    if (args.flags.ephemeral && res.sessionId) rt.deleteSession(res.sessionId);
   } finally {
     await rt.close();
   }

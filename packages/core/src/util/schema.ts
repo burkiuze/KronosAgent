@@ -28,6 +28,13 @@ export function validateInput(schema: JSONSchema, input: unknown): ValidationRes
   return { ok: errors.length === 0, errors, value: out as Record<string, unknown> };
 }
 
+/** Validate any JSON value (object, array or scalar) against a schema. */
+export function validateValue(schema: JSONSchema, value: unknown): { ok: boolean; errors: string[]; value: unknown } {
+  const errors: string[] = [];
+  const out = check(schema, value, '', errors);
+  return { ok: errors.length === 0, errors, value: out };
+}
+
 function typeOf(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';

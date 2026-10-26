@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 import { homedir } from 'node:os';
-import type { AgentEvent, FilePart, ImagePart, PermissionMode, UserInput } from './types.js';
+import type { AgentEvent, FilePart, ImagePart, JSONSchema, PermissionMode, UserInput } from './types.js';
 import { emptyUsage } from './types.js';
 import { NotConnectedError } from './providers/errors.js';
 import type { KronosConfig } from './config/schema.js';
@@ -17,6 +17,7 @@ import { ReviewEngine } from './review/engine.js';
 import { codeReviewTool } from './review/tool.js';
 import { toolSearchTool } from './tools/toolsearch.js';
 import { SessionRecaps } from './memory/recaps.js';
+import { validateValue } from './util/schema.js';
 import type { ToolDefinition } from './tools/types.js';
 import { shellTools } from './tools/shell.js';
 import { webTools } from './tools/web.js';
@@ -410,7 +411,20 @@ export class Kronos {
    */
   async runHeadless(
     prompt: string | UserInput,
-    opts: { sessionId?: string; model?: string; source?: string; mode?: PermissionMode; autoApprove?: boolean; preloadSkills?: string[]; cwd?: string; title?: string; signal?: AbortSignal; onEvent?: (e: AgentEvent) => void } = {},
+    opts: {
+      sessionId?: string;
+      model?: string;
+      source?: string;
+      mode?: PermissionMode;
+      autoApprove?: boolean;
+      preloadSkills?: string[];
+      cwd?: string;
+      title?: string;
+      signal?: AbortSignal;
+      onEvent?: (e: AgentEvent) => void;
+      /** the final answer must be JSON matching this schema (Codex `exec --output-schema`); retried twice */
+      outputSchema?: JSONSchema;
+    } = {},
   ) {
     // nothing to run with: report it without creating an empty session (a session pinned to the
     // demo model only because nothing was connected follows the default, as in Agent.run)
@@ -427,9 +441,19 @@ export class Kronos {
     if (opts.mode) agent.setMode(opts.mode, false);
     const off = opts.onEvent ? agent.events.on(opts.onEvent) : undefined;
     try {
-      const input = typeof prompt === 'string' ? await this.expandInput(prompt, session.cwd) : prompt;
-      const res = await agent.run(input, { model: opts.model, signal: opts.signal });
-      return { ...res, sessionId: session.id };
+      let input = typeof prompt === 'string' ? await this.expandInput(prompt, session.cwd) : prompt;
+      if (opts.outputSchema) input = { ...input, text: `${input.text}\n\n${schemaInstruction(opts.outputSchema)}` };
+      let res = await agent.run(input, { model: opts.model, signal: opts.signal });
+      if (!opts.outputSchema) return { ...res, sessionId: session.id };
+      let parsed = parseStructured(res.text, opts.outputSchema);
+      for (let attempt = 0; attempt < 2 && !parsed.ok && res.stopReason !== 'error' && !opts.signal?.aborted; attempt++) {
+        res = await agent.run(
+          { text: `Your final answer must be only JSON matching the schema. Problems: ${parsed.errors.slice(0, 8).join('; ')}. Reply again with the corrected JSON only — no prose, no code fences.` },
+          { model: opts.model, signal: opts.signal },
+        );
+        parsed = parseStructured(res.text, opts.outputSchema);
+      }
+      return { ...res, sessionId: session.id, output: parsed.ok ? parsed.value : undefined, schemaErrors: parsed.ok ? undefined : parsed.errors };
     } finally {
       off?.();
       this.releaseAgent(session.id);
@@ -628,4 +652,25 @@ export function ensureProfile(home: string, name: string): string {
   mkdirSync(dir, { recursive: true });
   ensureDirs(profilePaths(dir));
   return dir;
+}
+
+function schemaInstruction(schema: JSONSchema): string {
+  return `When you are done, your final answer must be a single JSON value matching this JSON Schema — only the JSON, no prose and no code fences:\n${JSON.stringify(schema, null, 2)}`;
+}
+
+/** Read the JSON value in a final answer and check it against the schema. */
+export function parseStructured(text: string, schema: JSONSchema): { ok: boolean; value?: unknown; errors: string[] } {
+  const body = text.trim().replace(/^```(?:json)?\s*\n?|\n?```$/g, '').trim();
+  const candidates = [body, /\{[\s\S]*\}|\[[\s\S]*\]/.exec(body)?.[0]].filter((c): c is string => Boolean(c));
+  for (const c of candidates) {
+    let value: unknown;
+    try {
+      value = JSON.parse(c);
+    } catch {
+      continue;
+    }
+    const v = validateValue(schema, value);
+    return v.ok ? { ok: true, value: v.value, errors: [] } : { ok: false, errors: v.errors };
+  }
+  return { ok: false, errors: ['the answer is not valid JSON'] };
 }

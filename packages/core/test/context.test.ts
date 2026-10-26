@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ProviderError, messageText } from '@kronos/core';
+import { ProviderError, messageText, parseStructured } from '@kronos/core';
 import type { ChatResponse, Message, ModelInfo, Provider, ToolCallPart } from '@kronos/core';
 import { syntaxProblems } from '../src/tools/diagnostics.js';
 import { makeRuntime, type TestEnv } from './helpers.js';
@@ -347,5 +347,31 @@ describe('background agents', () => {
     const results = env.rt.sessions.messages(s.id).flatMap((m) => m.parts).filter((p) => p.type === 'tool_result') as { toolName: string; content: string }[];
     expect(results[0]?.content).toMatch(/^Started a1 \(todo counter\) in the background/);
     expect(results.find((p) => p.toolName === 'agents' && p.content.includes('## a1'))?.content).toMatch(/## a1 todo counter — done\nFound 3 TODOs in src\//);
+  });
+});
+
+describe('structured output', () => {
+  const schema = { type: 'object', properties: { files: { type: 'integer' }, names: { type: 'array', items: { type: 'string' } } }, required: ['files', 'names'] };
+  it('parses and checks a JSON answer', () => {
+    expect(parseStructured('```json\n{"files": 2, "names": ["a", "b"]}\n```', schema)).toEqual({ ok: true, value: { files: 2, names: ['a', 'b'] }, errors: [] });
+    expect(parseStructured('Here: {"files": 2}', schema).ok).toBe(false);
+    expect(parseStructured('two files', schema).errors).toEqual(['the answer is not valid JSON']);
+  });
+
+  it('asks again until the final answer matches the schema', async () => {
+    let n = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        n++;
+        const text = n === 1 ? 'There are two files: a and b.' : '{"files": 2, "names": ["a", "b"]}';
+        return { parts: [{ type: 'text', text }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const r = (await env.rt.runHeadless('count the files', { model: 'kronos:demo', outputSchema: schema })) as { output?: unknown; schemaErrors?: string[] };
+    expect(n).toBe(2);
+    expect(r.output).toEqual({ files: 2, names: ['a', 'b'] });
+    expect(r.schemaErrors).toBeUndefined();
   });
 });

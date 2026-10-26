@@ -9,6 +9,8 @@ interface OAIRequest {
   messages: { role: string; content: string | { type: string; text?: string; image_url?: { url: string } }[] | null }[];
   stream?: boolean;
   user?: string;
+  /** json_schema (validated, retried) or json_object */
+  response_format?: { type: string; json_schema?: { name?: string; schema?: Record<string, unknown> } };
 }
 
 function contentText(c: OAIRequest['messages'][number]['content']): string {
@@ -77,8 +79,13 @@ export function buildOpenAIRoutes(gw: Gateway): Router {
     const created = Math.floor(Date.now() / 1000);
     const model = body.model ?? 'kronos';
 
+    const rf = body.response_format;
+    const outputSchema = rf?.type === 'json_schema' && rf.json_schema?.schema ? rf.json_schema.schema : rf?.type === 'json_object' ? { type: 'object' } : undefined;
+    if (outputSchema && body.stream) throw new HttpError(400, 'response_format with stream is not supported; use stream: false');
     if (!body.stream) {
-      const result = await k.runHeadless({ text: prompt, images: imagesOf(last?.content ?? null) }, { sessionId, model: modelRef, source: 'api' });
+      const result = (await k.runHeadless({ text: prompt, images: imagesOf(last?.content ?? null) }, { sessionId, model: modelRef, source: 'api', outputSchema })) as Awaited<ReturnType<typeof k.runHeadless>> & { output?: unknown; schemaErrors?: string[] };
+      if (outputSchema && result.output === undefined) throw new HttpError(422, `the answer did not match response_format: ${(result.schemaErrors ?? []).join('; ')}`);
+      if (outputSchema) result.text = JSON.stringify(result.output);
       return {
         id,
         object: 'chat.completion',
