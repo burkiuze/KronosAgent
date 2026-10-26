@@ -34,7 +34,9 @@ export type DiffSpec =
   | { kind: 'staged' }
   | { kind: 'range'; base: string; head?: string }
   | { kind: 'commit'; commit: string }
-  | { kind: 'raw'; diff: string };
+  | { kind: 'raw'; diff: string }
+  /** whole files, no diff (open-code-review's scan): every line is reviewed */
+  | { kind: 'scan'; paths: string[] };
 
 function unquote(p: string): string {
   const s = p.trim();
@@ -225,6 +227,8 @@ export async function collectDiff(cwd: string, spec: DiffSpec, signal?: AbortSig
   switch (spec.kind) {
     case 'raw':
       return { files: parseUnifiedDiff(spec.diff), label: 'patch', raw: spec.diff };
+    case 'scan':
+      return { files: await scanFiles(cwd, spec.paths, signal), label: `scan of ${spec.paths.length ? spec.paths.join(', ') : 'the repository'}`, raw: '' };
     case 'staged': {
       const raw = await git(cwd, ['diff', ...opts, '--cached'], signal);
       return { files: parseUnifiedDiff(raw), label: 'staged changes', raw };
@@ -257,4 +261,38 @@ export async function collectDiff(cwd: string, spec: DiffSpec, signal?: AbortSig
       return { files: parseUnifiedDiff(raw), label: 'uncommitted changes', raw };
     }
   }
+}
+
+/** Whole files as if newly added, so the review pipeline can scan them like a diff. */
+async function scanFiles(cwd: string, paths: string[], signal?: AbortSignal): Promise<DiffFile[]> {
+  const { walk } = await import('../util/glob.js');
+  const { existsSync, readFileSync, statSync } = await import('node:fs');
+  const { relative, resolve } = await import('node:path');
+  const { looksBinary } = await import('../util/text.js');
+  const rels = new Set<string>();
+  for (const p of paths.length ? paths : ['.']) {
+    const abs = resolve(cwd, p);
+    if (!existsSync(abs)) throw new Error(`${p} does not exist`);
+    if (statSync(abs).isFile()) rels.add(relative(cwd, abs));
+    else for (const e of await walk(abs, { maxFiles: 5000, signal })) if (!e.isDir) rels.add(relative(cwd, e.path));
+  }
+  const out: DiffFile[] = [];
+  for (const rel of [...rels].sort()) {
+    const abs = resolve(cwd, rel);
+    const buf = statSync(abs).size > 2 * 1024 * 1024 ? Buffer.from([0]) : readFileSync(abs);
+    if (looksBinary(buf)) {
+      out.push({ path: rel, status: 'added', binary: true, hunks: [], additions: 0, deletions: 0 });
+      continue;
+    }
+    const lines = buf.toString('utf8').replace(/\n$/, '').split('\n');
+    out.push({
+      path: rel,
+      status: 'added',
+      binary: false,
+      additions: lines.length,
+      deletions: 0,
+      hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, section: '', lines: lines.map((text, i) => ({ kind: 'add' as const, text, newNo: i + 1 })) }],
+    });
+  }
+  return out;
 }

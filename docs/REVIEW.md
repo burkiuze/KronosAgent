@@ -11,6 +11,8 @@ kronos review --base main          # everything since the merge base with main
 kronos review --commit HEAD~1
 kronos review --pr 42 --post       # review pull request #42 and post inline comments
 kronos review --format sarif --out review.sarif --fail-on high   # CI
+kronos review --scan src/payments  # whole files, no diff (a directory, files, or the repository)
+kronos review --base main --preview  # what would be reviewed, without calling a model
 ```
 
 In a chat: `/review`, `/review main`, `/review #42`, or just ask ("review my changes"). On

@@ -6,7 +6,7 @@ import { parsePullRequestRef, postPullRequestReview, reviewPullRequest } from '.
 import type { ReviewResult, ReviewProgress } from './engine.js';
 import type { Severity } from './findings.js';
 
-export const codeReviewTool: ToolDefinition<{ target?: 'changes' | 'staged' | 'branch' | 'commit' | 'pr'; base?: string; commit?: string; pr?: string; post?: boolean; focus?: string; min_severity?: Severity }> = {
+export const codeReviewTool: ToolDefinition<{ target?: 'changes' | 'staged' | 'branch' | 'commit' | 'pr' | 'scan'; paths?: string[]; base?: string; commit?: string; pr?: string; post?: boolean; focus?: string; min_severity?: Severity }> = {
   name: 'code_review',
   toolset: 'review',
   risk: (i) => (i.post ? 'external' : 'read'),
@@ -17,7 +17,8 @@ export const codeReviewTool: ToolDefinition<{ target?: 'changes' | 'staged' | 'b
   parameters: {
     type: 'object',
     properties: {
-      target: { type: 'string', enum: ['changes', 'staged', 'branch', 'commit', 'pr'] },
+      target: { type: 'string', enum: ['changes', 'staged', 'branch', 'commit', 'pr', 'scan'] },
+      paths: { type: 'array', items: { type: 'string' }, description: 'target "scan": files or directories to review whole (default: the repository).' },
       pr: { type: 'string', description: 'Pull request for target "pr": 12, owner/repo#12 or its URL.' },
       post: { type: 'boolean', description: 'target "pr": post the review on GitHub (inline comments with suggestions).' },
       base: { type: 'string', description: 'Base branch for target "branch" (default: origin/HEAD, main or master).' },
@@ -29,7 +30,8 @@ export const codeReviewTool: ToolDefinition<{ target?: 'changes' | 'staged' | 'b
   summarize: (i) => `Review ${i.target === 'pr' ? `pull request ${i.pr ?? ''}` : i.target === 'branch' ? `branch vs ${i.base ?? 'main'}` : i.target === 'commit' ? `commit ${i.commit ?? ''}` : i.target === 'staged' ? 'staged changes' : 'changes'}`,
   async execute(input, ctx) {
     let spec: DiffSpec = { kind: 'workspace' };
-    if (input.target === 'staged') spec = { kind: 'staged' };
+    if (input.target === 'scan') spec = { kind: 'scan', paths: input.paths ?? [] };
+    else if (input.target === 'staged') spec = { kind: 'staged' };
     else if (input.target === 'commit') {
       if (!input.commit) return { content: 'commit is required for target "commit"', isError: true };
       spec = { kind: 'commit', commit: input.commit };

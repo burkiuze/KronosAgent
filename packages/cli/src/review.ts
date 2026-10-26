@@ -28,6 +28,8 @@ export const REVIEW_HELP = `${c.bold('kronos review')} — review code changes
   kronos review --commit <sha>     one commit
   kronos review --pr <n|url>       a GitHub pull request (in a throwaway worktree)
   kronos review --diff file.patch  a patch file ("-" reads stdin)
+  kronos review --scan [paths]     whole files, no diff (a directory, files, or the repository)
+  kronos review … --preview        list what would be reviewed, without calling a model
 
   --focus "<text>"        what the change should do / what to look at
   --format text|markdown|json|sarif|github   (default text)
@@ -78,6 +80,7 @@ function printText(r: ReviewResult, showDropped: boolean): void {
 }
 
 export async function cmdReview(rt: Kronos, args: ParsedArgs): Promise<void> {
+  let specOverride: DiffSpec | undefined;
   if (args.flags.help) return void console.log(REVIEW_HELP);
   const cwd = rt.cwd;
   const format = (flagStr(args, 'format') ?? 'text').toLowerCase();
@@ -95,7 +98,7 @@ export async function cmdReview(rt: Kronos, args: ParsedArgs): Promise<void> {
     onProgress,
   };
   const ready = rt.providers.readiness(common.model);
-  if (!ready.ok) {
+  if (!ready.ok && !args.flags.preview) {
     console.error(c.red(`${sym.fail} No model is connected. Run \`kronos setup\` or \`kronos keys set\` first.`));
     process.exitCode = 2;
     return;
@@ -103,6 +106,10 @@ export async function cmdReview(rt: Kronos, args: ParsedArgs): Promise<void> {
 
   let result: ReviewResult;
   const pr = flagStr(args, 'pr');
+  if (args.flags.scan !== undefined) {
+    const paths = [...(typeof args.flags.scan === 'string' ? [args.flags.scan] : []), ...args._.slice(1)].flatMap((p) => p.split(',')).filter(Boolean);
+    specOverride = { kind: 'scan', paths };
+  }
   if (pr) {
     const ref = await parsePullRequestRef(rt, pr, cwd);
     result = (await reviewPullRequest(rt, ref, common)).result;
@@ -111,7 +118,7 @@ export async function cmdReview(rt: Kronos, args: ParsedArgs): Promise<void> {
       process.stderr.write(`${c.green(sym.ok)} Posted on ${ref.repo}#${ref.number}${posted.url ? ` — ${posted.url}` : ''} (${posted.inline} inline)\n`);
     }
   } else {
-    let spec: DiffSpec = { kind: 'workspace' };
+    let spec: DiffSpec = specOverride ?? { kind: 'workspace' };
     const diffFile = flagStr(args, 'diff');
     if (diffFile) {
       const { readFileSync } = await import('node:fs');
@@ -122,6 +129,13 @@ export async function cmdReview(rt: Kronos, args: ParsedArgs): Promise<void> {
       const base = typeof args.flags.base === 'string' ? args.flags.base : await defaultBase(cwd);
       if (!base) throw new Error('No base branch found; pass --base <branch>.');
       spec = { kind: 'range', base, head: flagStr(args, 'head') };
+    }
+    if (args.flags.preview) {
+      const p = await rt.review.preview({ cwd, spec });
+      console.log(`${c.bold('Preview')} ${p.label}: ${p.groups.reduce((n, g) => n + g.files.length, 0)} files in ${p.groups.length} reviewer group${p.groups.length === 1 ? '' : 's'}, ${p.changedLines.toLocaleString()} lines`);
+      for (const g of p.groups) console.log(`  ${c.gray(`group ${g.id} (${g.changedLines} lines)`)} ${g.files.join(', ')}`);
+      if (p.skipped.length) console.log(c.gray(`  not reviewed: ${p.skipped.map((s) => `${s.path} (${s.reason})`).join(', ')}`));
+      return;
     }
     result = await rt.review.run({ cwd, spec, ...common });
   }

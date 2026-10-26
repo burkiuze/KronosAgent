@@ -186,10 +186,18 @@ export class ReviewEngine {
       if (!existsSync(p) || statSync(p).size > 4 * 1024 * 1024) return undefined;
       return readFileSync(p, 'utf8').split('\n');
     };
-    if (spec.kind === 'workspace' || spec.kind === 'raw') return disk();
+    if (spec.kind === 'workspace' || spec.kind === 'raw' || spec.kind === 'scan') return disk();
     const rev = spec.kind === 'staged' ? '' : (headSha ?? 'HEAD');
     const r = await runProcess('git', ['show', `${rev}:${path}`], { cwd, timeoutMs: 20_000, maxBuffer: 8 * 1024 * 1024 });
     return r.exitCode === 0 ? r.stdout.split('\n') : disk();
+  }
+
+  /** What a review would cover, without calling a model (open-code-review's --preview). */
+  async preview(opts: Pick<ReviewOptions, 'cwd' | 'spec' | 'signal'>): Promise<{ label: string; groups: { id: number; files: string[]; changedLines: number }[]; skipped: Skipped[]; changedLines: number }> {
+    const diff = await collectDiff(opts.cwd, opts.spec, opts.signal);
+    const { selected, skipped } = selectFiles(diff.files, { include: this.cfg.include, exclude: this.cfg.exclude, maxFileLines: this.cfg.maxFileLines });
+    const groups = groupFiles(selected, { maxFiles: this.cfg.maxFilesPerGroup, maxLines: this.cfg.maxGroupLines });
+    return { label: diff.label, groups: groups.map((g) => ({ id: g.id, files: g.files.map((f) => f.path), changedLines: g.changedLines })), skipped, changedLines: groups.reduce((n, g) => n + g.changedLines, 0) };
   }
 
   async run(opts: ReviewOptions): Promise<ReviewResult> {
@@ -413,6 +421,9 @@ export class ReviewEngine {
       `\n## Check for\n${GENERAL_CHECKS.map((c) => `- ${c}`).join('\n')}`,
       ...lists.map((l) => `\n### ${l.name}\n${l.items.map((i) => `- ${i}`).join('\n')}`),
       scoped.length ? `\n## Project review rules (cite the file in \`rule\` when a finding relies on one)\n${scoped.map((r) => `### ${r.source}${r.paths.length ? ` (applies to ${r.paths.join(', ')})` : ''}\n${r.text}`).join('\n\n')}` : '',
+      opts.spec.kind === 'scan'
+        ? '\nThis is a full scan, not a change: review the code as it is now (rule 3 does not apply — existing problems are what you are looking for).'
+        : '',
       `\nThe files on disk are the new version. Investigate, call review_comment for each finding, then review_done. If you cannot call tools, reply with JSON only: {"findings": [{"path", "start_line", "end_line", "existing_code", "title", "body", "severity", "category", "confidence"}], "verdict": "correct" | "incorrect", "summary": "…"}.`,
     ]
       .filter(Boolean)
@@ -487,7 +498,8 @@ export class ReviewEngine {
         continue;
       }
       const ground = v.ground ?? '';
-      const allowed = PROTECTED.has(f.category) ? ground === 'A' || ground === 'B' : ['A', 'B', 'C', 'D'].includes(ground);
+      const grounds = opts.spec.kind === 'scan' ? ['A', 'B', 'D'] : ['A', 'B', 'C', 'D'];
+      const allowed = PROTECTED.has(f.category) ? ground === 'A' || ground === 'B' : grounds.includes(ground);
       if (v.verdict === 'drop' && allowed) {
         result.dropped.push({ finding: f, reason: `refuted (${ground}): ${v.reason ?? 'no reason given'}` });
         continue;

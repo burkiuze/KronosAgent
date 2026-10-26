@@ -304,3 +304,30 @@ describe('/review command', () => {
     expect(env.rt.tools.get('code_review')?.toolset).toBe('review');
   });
 });
+
+describe('full-file scan', () => {
+  it('reviews whole files without a diff, and previews without a model', async () => {
+    const ws = env.workspace;
+    mkdirSync(join(ws, 'lib'));
+    writeFileSync(join(ws, 'lib', 'a.py'), 'def f(items=[]):\n    items.append(1)\n    return items\n');
+    writeFileSync(join(ws, 'lib', 'b.py'), 'x = 1\n');
+    writeFileSync(join(ws, 'package-lock.json'), '{}');
+    const p = await env.rt.review.preview({ cwd: ws, spec: { kind: 'scan', paths: ['lib', 'package-lock.json'] } });
+    expect(p.groups.flatMap((g) => g.files).sort()).toEqual(['lib/a.py', 'lib/b.py']);
+    expect(p.skipped).toEqual([{ path: 'package-lock.json', reason: 'lock file' }]);
+    let task = '';
+    inject({
+      id: 'kronos',
+      async chat(req: ChatRequest): Promise<ChatResponse> {
+        if (req.system.startsWith('You are the fact-checker')) return { parts: [{ type: 'text', text: '{"results": [{"id": "F1", "verdict": "drop", "ground": "C", "reason": "untouched"}]}' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        task ||= JSON.stringify(req.messages);
+        const text = '{"findings": [{"path": "lib/a.py", "start_line": 1, "existing_code": "def f(items=[]):", "title": "Mutable default argument", "body": "Shared between calls.", "severity": "medium", "category": "bug"}], "verdict": "correct", "summary": "ok"}';
+        return { parts: [{ type: 'text', text }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const r = await env.rt.review.run({ cwd: ws, spec: { kind: 'scan', paths: ['lib'] } });
+    expect(task).toContain('This is a full scan, not a change');
+    // ground C ("code this change did not touch") cannot drop a finding in a scan
+    expect(r.findings.map((f) => [f.path, f.startLine, f.inDiff])).toEqual([['lib/a.py', 1, true]]);
+  });
+});
