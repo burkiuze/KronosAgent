@@ -60,6 +60,7 @@ export const TOOLSETS: ToolsetInfo[] = [
   { id: 'http', label: 'HTTP', description: 'Call REST/GraphQL APIs.' },
   { id: 'mcp', label: 'MCP', description: 'Tools from connected Model Context Protocol servers.' },
   { id: 'github', label: 'GitHub', description: 'Clone repositories, push branches, open pull requests, read and answer issues.' },
+  { id: 'review', label: 'Code review', description: 'Review changes with parallel reviewers, verified findings and inline pull request comments.' },
 ];
 
 export function resolveRisk<I extends Record<string, unknown>>(def: ToolDefinition<I>, input: I): ToolRisk {

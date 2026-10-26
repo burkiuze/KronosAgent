@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
-import { logger, errorMessage, type Kronos } from '@kronos/core';
+import { logger, errorMessage, postPullRequestReview, reviewPullRequest, type Kronos } from '@kronos/core';
 import { readBody, sendJson } from './http.js';
 
 const log = logger('github-bot');
@@ -27,7 +27,7 @@ interface Payload {
   comment?: { id: number; body: string; author_association: string; user: { login: string; type: string }; path?: string; line?: number; diff_hunk?: string };
   review?: { id: number; body: string | null; author_association: string; user: { login: string; type: string } };
   issue?: { number: number; title: string; body: string | null; pull_request?: unknown; html_url: string; author_association: string; user: { login: string } };
-  pull_request?: { number: number; title: string; body: string | null; html_url: string; author_association?: string; user: { login: string } };
+  pull_request?: { number: number; title: string; body: string | null; html_url: string; author_association?: string; draft?: boolean; user: { login: string; type?: string } };
 }
 
 interface Job {
@@ -42,6 +42,8 @@ interface Job {
   commentId?: number;
   reviewComment?: { path?: string; line?: number; hunk?: string };
   url: string;
+  /** automatic run nobody asked for: no "on it" comment, the result speaks for itself */
+  quiet?: boolean;
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -154,6 +156,12 @@ export class GitHubBot {
       if (!mentions(p.review.body) || !allowed(p.review.author_association)) return undefined;
       return { ...base, number: p.pull_request.number, isPr: true, title: p.pull_request.title, body: p.pull_request.body ?? '', request: p.review.body ?? '', author: p.review.user.login, url: p.pull_request.html_url };
     }
+    // github.bot.autoReview: every new (non-draft) pull request gets a review without being asked
+    if (event === 'pull_request' && p.pull_request && cfg.autoReview && ['opened', 'ready_for_review', 'reopened'].includes(p.action ?? '')) {
+      if (p.pull_request.draft || p.pull_request.user.type === 'Bot') return undefined;
+      const pr = p.pull_request;
+      return { ...base, number: pr.number, isPr: true, title: pr.title, body: pr.body ?? '', request: `${cfg.trigger} review`, author: pr.user.login, url: pr.html_url, quiet: true };
+    }
     if (event === 'issues' && (p.action === 'opened' || p.action === 'assigned') && p.issue) {
       if (!mentions(`${p.issue.title}\n${p.issue.body ?? ''}`) || !allowed(p.issue.author_association)) return undefined;
       return { ...base, number: p.issue.number, isPr: false, title: p.issue.title, body: p.issue.body ?? '', request: p.issue.body ?? p.issue.title, author: p.issue.user.login, url: p.issue.html_url };
@@ -167,8 +175,9 @@ export class GitHubBot {
     const token = await gh.installationToken(job.installation);
     const api = <T>(method: string, path: string, body?: unknown) => gh.request<T>(method, path, body, { token });
     if (job.commentId) await api('POST', `/repos/${job.repo}/issues/comments/${job.commentId}/reactions`, { content: 'eyes' }).catch(() => undefined);
-    const status = await api<{ id: number }>('POST', `/repos/${job.repo}/issues/${job.number}/comments`, { body: `🕐 **Kronos is on it** — working on @${job.author}'s request…` }).catch(() => undefined);
+    const status = job.quiet ? undefined : await api<{ id: number }>('POST', `/repos/${job.repo}/issues/${job.number}/comments`, { body: `🕐 **Kronos is on it** — working on @${job.author}'s request…` }).catch(() => undefined);
     const reply = async (text: string) => {
+      if (job.quiet && !text.startsWith('⚠️')) return;
       const body = `${text}\n\n---\n_[Kronos Agent](https://github.com/burkiuze/KronosAgent)_`;
       if (status) await api('PATCH', `/repos/${job.repo}/issues/comments/${status.id}`, { body }).catch(() => api('POST', `/repos/${job.repo}/issues/${job.number}/comments`, { body }));
       else await api('POST', `/repos/${job.repo}/issues/${job.number}/comments`, { body }).catch(() => undefined);
@@ -176,6 +185,17 @@ export class GitHubBot {
 
     this.running++;
     try {
+      // "@kronos review" on a pull request: a code review with inline comments, no code changes
+      if (job.isPr && this.wantsReview(job.request)) {
+        const focus = job.request.replace(/@[\w-]+(\[bot\])?\s+review\b[:,]?/i, '').trim();
+        const { result } = await reviewPullRequest(rt, { repo: job.repo, number: job.number }, { focus: focus || undefined, model: rt.config.github.bot.model ?? undefined });
+        const posted = await postPullRequestReview(rt, { repo: job.repo, number: job.number }, result);
+        const n = result.findings.length;
+        await reply(
+          `🔍 **Review done** — ${result.summary}${posted.url ? `\n\n[${n ? `${n} finding${n === 1 ? '' : 's'}` : 'The review'}](${posted.url})${posted.inline ? ` · ${posted.inline} inline` : ''}` : ''}\n\nAsk \`@kronos fix the review findings\` and I will push the fixes to this pull request.`,
+        );
+        return;
+      }
       const dir = join(rt.paths.root, 'github-work', job.repo);
       await gh.clone(job.repo, { dest: dir });
       const git = (...args: string[]) => gh.git(args, dir, token);
@@ -281,6 +301,14 @@ export class GitHubBot {
     } finally {
       this.running--;
     }
+  }
+
+  /** "@kronos review", "@kronos review this, focus on auth" — the mention followed by "review" */
+  private wantsReview(request: string): boolean {
+    const cfg = this.rt().config.github.bot;
+    const app = this.rt().github.app();
+    const names = [cfg.trigger, app?.slug ? `@${app.slug}` : ''].filter(Boolean).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return names.some((n) => new RegExp(`(^|\\s)${n}(\\[bot\\])?\\s+(please\\s+)?(code[- ]?)?review\\b`, 'i').test(request));
   }
 
   get active(): number {

@@ -527,7 +527,7 @@ export class GitHubService {
       setup_on_update: true,
       public: Boolean(opts.public),
       default_permissions: { contents: 'write', pull_requests: 'write', issues: 'write', metadata: 'read', checks: 'read', statuses: 'read', actions: 'read' },
-      default_events: ['issue_comment', 'issues', 'pull_request_review_comment', 'pull_request_review'],
+      default_events: ['issue_comment', 'issues', 'pull_request', 'pull_request_review_comment', 'pull_request_review'],
     };
     const web = this.cfg.webUrl.replace(/\/+$/, '');
     const action = `${web}/${opts.org ? `organizations/${encodeURIComponent(opts.org)}/` : ''}settings/apps/new?state=${state}`;

@@ -35,6 +35,7 @@ function writeWithDiff(ctx: ToolContext, path: string, next: string, before: str
   ctx.checkpoint(path);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, next);
+  ctx.agent.stampFile(path);
   recordFileArtifact(ctx, path);
   const diff = unifiedDiff(before ?? '', next, rel(ctx, path));
   return { path, diff, ...diffStats(diff) };
@@ -127,6 +128,11 @@ export const writeFileTool: ToolDefinition<{ path: string; content: string }> = 
   async execute(input, ctx) {
     const path = resolvePath(input.path, ctx.cwd);
     if (existsSync(path) && statSync(path).isDirectory()) return fail(`${input.path} is a directory`);
+    const stale = ctx.agent.staleWrite(path);
+    if (stale === 'changed')
+      return fail(`Not written: ${rel(ctx, path)} changed on disk since you last read it (edited by the user, a formatter, a command or another agent). Read it again and apply your change to the current content — or call write_file again to overwrite it anyway.`);
+    if (stale === 'unread')
+      return fail(`Not written: ${rel(ctx, path)} already exists and you have not read it in this conversation. Read it first (or use edit_file for a targeted change) — or call write_file again to replace it entirely.`);
     const before = existsSync(path) ? readFileSync(path, 'utf8') : null;
     const meta = writeWithDiff(ctx, path, input.content, before);
     const lines = input.content.split('\n').length;
@@ -315,6 +321,7 @@ export const applyPatchTool: ToolDefinition<{ patch: string }> = {
       if (p.moveTo) ctx.checkpoint(p.moveTo);
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, p.next);
+      ctx.agent.stampFile(target);
       if (p.moveTo && p.moveTo !== p.path) rmSync(p.path, { force: true });
       recordFileArtifact(ctx, target);
       const d = unifiedDiff(p.before ?? '', p.next, rel(ctx, target));

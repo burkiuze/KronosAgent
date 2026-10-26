@@ -13,6 +13,8 @@ import { fileTools } from './tools/files.js';
 import { repoMapTool } from './tools/repomap.js';
 import { GitHubService } from './github/github.js';
 import { githubTool } from './github/tool.js';
+import { ReviewEngine } from './review/engine.js';
+import { codeReviewTool } from './review/tool.js';
 import type { ToolDefinition } from './tools/types.js';
 import { shellTools } from './tools/shell.js';
 import { webTools } from './tools/web.js';
@@ -82,6 +84,18 @@ export interface SkillStats {
   failed?: number;
 }
 
+/** Slash commands every installation has (a custom command of the same name replaces one). */
+const BUILTIN_COMMANDS: (CommandInfo & { template: (args: string) => string })[] = [
+  {
+    name: 'review',
+    description: 'Review changes with verified findings: uncommitted (default), a branch ("main"), a commit or a pull request ("#12")',
+    source: 'command',
+    template: (args) =>
+      `Review ${args ? `this: ${args}` : 'my uncommitted changes'} with the code_review tool (pick its target from what I wrote: a branch name means target "branch" with that base, a commit hash target "commit", a pull request number or URL target "pr"). ` +
+      'Then present the findings grouped by severity with file:line links, and offer to fix them. Do not change any code until I say so.',
+  },
+];
+
 export class Kronos {
   readonly events = new Emitter<RuntimeEvent>();
   readonly home: string;
@@ -105,6 +119,7 @@ export class Kronos {
   mcp!: McpManager;
   backend!: ExecBackend;
   github!: GitHubService;
+  review!: ReviewEngine;
   messaging?: MessagingBridge;
   private agents = new Map<string, Agent>();
   private background = new Set<Promise<unknown>>();
@@ -135,7 +150,8 @@ export class Kronos {
     k.backend = createBackend(k.config.terminal, k.workspace());
     k.mcp = new McpManager(k.tools);
     k.github = new GitHubService(k);
-    k.tools.registerAll([...fileTools, repoMapTool as ToolDefinition, githubTool as ToolDefinition, ...shellTools, ...webTools, ...browserTools, ...agenticTools]);
+    k.review = new ReviewEngine(k);
+    k.tools.registerAll([...fileTools, repoMapTool as ToolDefinition, githubTool as ToolDefinition, codeReviewTool as ToolDefinition, ...shellTools, ...webTools, ...browserTools, ...agenticTools]);
     k.cron = new CronScheduler(k.paths.cron, (job) => k.runCronJob(job), { timezone: k.config.cron.timezone, maxConcurrent: k.config.cron.maxConcurrent });
     k.cron.on((e) => k.events.emit({ type: 'cron', kind: e.type, job: e.job }));
     if (opts.connectMcp !== false && Object.keys(k.config.mcp.servers).length) await k.mcp.connectAll(k.config.mcp.servers);
@@ -479,8 +495,10 @@ export class Kronos {
   }
 
   commands(cwd = this.cwd): CommandInfo[] {
+    const custom = this.customCommands(cwd);
     return [
-      ...this.customCommands(cwd).map(({ path: _p, ...c }) => c),
+      ...custom.map(({ path: _p, ...c }) => c),
+      ...BUILTIN_COMMANDS.filter((b) => !custom.some((c) => c.name === b.name)).map(({ template: _t, ...c }) => c),
       ...this.skills.list().map((s) => ({ name: s.name, description: s.description, source: 'skill' as const })),
     ];
   }
@@ -497,8 +515,12 @@ export class Kronos {
       const name = m[1] as string;
       const args = (m[2] ?? '').trim();
       const custom = this.customCommands(cwd).find((c) => c.name === name);
-      const skill = custom ? undefined : this.skills.get(name);
-      if (custom) {
+      const builtin = custom ? undefined : BUILTIN_COMMANDS.find((c) => c.name === name);
+      const skill = custom || builtin ? undefined : this.skills.get(name);
+      if (builtin) {
+        out = builtin.template(args);
+        command = name;
+      } else if (custom) {
         const { body } = parseFrontmatter(readFileSync(custom.path, 'utf8'));
         const argv = args.split(/\s+/).filter(Boolean);
         out = body.replace(/\$ARGUMENTS/g, args).replace(/\$(\d)/g, (_, i: string) => argv[Number(i) - 1] ?? '');

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import type {
   AgentEvent,
@@ -72,6 +72,8 @@ export interface AgentOptions {
   toolFilter?: { only?: string[]; exclude?: string[] };
   /** members of a delegated team share a board (see team_board) */
   team?: { board: TeamBoard; member: string };
+  /** tools only this agent has (e.g. the review_comment tool of a code reviewer) */
+  extraTools?: ToolDefinition[];
 }
 
 export interface AgentRunOptions {
@@ -135,6 +137,9 @@ export class Agent {
   private pendingPermissions = new Map<string, (d: PermissionDecision) => void>();
   private pendingClarify = new Map<string, (a: string) => void>();
   private readFiles = new Set<string>();
+  /** mtime/size of each file as this agent last read or wrote it (stale-write guard) */
+  private fileStamps = new Map<string, { mtimeMs: number; size: number }>();
+  private staleWarned = new Set<string>();
   /**
    * Full file reads whose content is still in the context, keyed by path + range. Bumping
    * `contextEpoch` (compaction, undo) invalidates them all, since earlier tool output is gone.
@@ -234,7 +239,7 @@ export class Agent {
     if (this.depth >= cfg.agent.subagents.maxDepth) exclude.push('delegate');
     if (!this.opts.team) exclude.push('team_board');
     const tools = this.rt.tools.resolve(enabled, this.rt, { only, exclude });
-    return lean && !only ? tools.filter((t) => LEAN_TOOLS.has(t.name)) : tools;
+    return [...(lean && !only ? tools.filter((t) => LEAN_TOOLS.has(t.name)) : tools), ...(this.opts.extraTools ?? [])];
   }
 
   private ensureContext(model: ModelInfo): void {
@@ -242,7 +247,7 @@ export class Agent {
     // the frozen context is reused unless the model moved in or out of lean mode
     if (this.session.systemPrompt && this.session.toolNames && Boolean(this.session.meta?.lean) === lean) {
       const names = new Set(this.session.toolNames);
-      this.tools = this.rt.tools.all().filter((t) => names.has(t.name) && (!t.available || t.available(this.rt) === null));
+      this.tools = [...this.rt.tools.all(), ...(this.opts.extraTools ?? [])].filter((t) => names.has(t.name) && (!t.available || t.available(this.rt) === null));
       this.toolSpecs = this.rt.tools.specs(this.tools, lean);
       return;
     }
@@ -352,6 +357,39 @@ export class Agent {
 
   noteRead(path: string): void {
     this.readFiles.add(path);
+    this.stampFile(path);
+  }
+
+  /** Remember the version of `path` this agent has seen (after reading or writing it). */
+  stampFile(path: string): void {
+    try {
+      const st = statSync(path);
+      this.fileStamps.set(path, { mtimeMs: st.mtimeMs, size: st.size });
+    } catch {
+      this.fileStamps.delete(path);
+    }
+  }
+
+  /**
+   * Stale-write guard: replacing a whole file is only safe when this agent knows its current
+   * content. Returns why not — the file was never read here, or it changed on disk since (the
+   * user, a formatter, a shell command or another agent) — or undefined when it is safe. The
+   * warning is given once per file version, so a deliberate second attempt goes through.
+   */
+  staleWrite(path: string): string | undefined {
+    let st;
+    try {
+      st = statSync(path);
+    } catch {
+      return undefined;
+    }
+    if (!st.isFile() || st.size === 0) return undefined;
+    const stamp = this.fileStamps.get(path);
+    const key = `${path}@${st.mtimeMs}:${st.size}`;
+    if (stamp && stamp.mtimeMs === st.mtimeMs && stamp.size === st.size) return undefined;
+    if (this.staleWarned.has(key)) return undefined;
+    this.staleWarned.add(key);
+    return stamp ? 'changed' : 'unread';
   }
 
   /** A read of this exact file and range whose (unchanged) content is still in the context. */
@@ -837,7 +875,7 @@ export class Agent {
         results[index] = { type: 'tool_result', toolCallId: call.id, toolName: call.name, content, isError: true };
         this.emit({ type: 'tool_result', runId, id: call.id, name: call.name, content, isError: true, durationMs: 0 });
       };
-      const def = known.has(call.name) ? this.rt.tools.get(call.name) : undefined;
+      const def = known.has(call.name) ? this.tools.find((t) => t.name === call.name) : undefined;
       if (!def) {
         this.emit({ type: 'tool_call', runId, id: call.id, name: call.name, input: call.input, summary: call.name, toolset: 'unknown' });
         fail(`Unknown tool "${call.name}". Did you mean ${suggestTools(call.name, known).map((n) => `"${n}"`).join(' or ')}? Available tools: ${[...known].join(', ')}`);

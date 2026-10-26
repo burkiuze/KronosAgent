@@ -65,7 +65,8 @@ export const shellTool: ToolDefinition<{ command: string; timeout?: number; cwd?
       timeoutMs: timeoutSec * 1000,
       signal: ctx.signal,
       onData: (chunk) => {
-        buffered += chunk;
+        // only the tail is ever shown as progress: keep memory flat for chatty commands
+        buffered = (buffered + chunk).slice(-4000);
         const now = Date.now();
         if (now - lastProgress > 400) {
           lastProgress = now;

@@ -30,6 +30,7 @@ import { parseArgs, flagStr, type ParsedArgs } from './args.js';
 import { Repl } from './repl.js';
 import { runSetup } from './setup.js';
 import { importFrom } from './importers.js';
+import { cmdReview } from './review.js';
 import { EventRenderer } from './ui/render.js';
 import { c, logo, sym } from './ui/ansi.js';
 
@@ -52,6 +53,7 @@ ${c.bold('Manage')}
   kronos cron [list|add|remove|run|pause|resume]            kronos memory [show|add|search|clear]
   kronos mcp [list|add|remove|serve]                        kronos pairing [list|approve <code>]
   kronos github [status|repos [query]|clone <owner/repo>|login [token]|logout]
+  kronos review [--base main|--commit sha|--staged|--pr n] [--format text|markdown|json|sarif] [--post] [--fail-on high]
   kronos import <hermes|openclaw|claude|codex|cursor>       kronos insights [--days N]
   kronos doctor · kronos version · kronos update [--check]
 
@@ -156,6 +158,8 @@ export async function main(argv: string[]): Promise<void> {
       return withRt(args, (rt) => cmdConfig(rt, pos));
     case 'keys':
       return withRt(args, (rt) => cmdKeys(rt, pos));
+    case 'review':
+      return withRt(args, (rt) => cmdReview(rt, args));
     case 'github':
     case 'gh':
       return withRt(args, (rt) => cmdGitHub(rt, pos));

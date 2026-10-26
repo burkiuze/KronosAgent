@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ProviderError, messageText } from '@kronos/core';
 import type { ChatResponse, Message, ModelInfo, Provider, ToolCallPart } from '@kronos/core';
@@ -132,5 +132,36 @@ describe('syntax check after edits', () => {
     expect(result.content).toMatch(/Syntax check failed/);
     expect(result.content).toMatch(/bad\.ts:2:\d+/);
     expect(result.meta?.syntaxErrors).toBeGreaterThan(0);
+  });
+});
+
+describe('stale-write guard', () => {
+  it('will not overwrite a file it never read, or one that changed since it read it — once', async () => {
+    const s = env.rt.createSession({ source: 'test' });
+    const agent = env.rt.agent(s.id);
+    const ctx = { runtime: env.rt, agent, sessionId: s.id, cwd: env.workspace, signal: new AbortController().signal, toolCallId: 't', turn: 0, progress() {}, askUser: async () => '', checkpoint() {} } as never;
+    const tools = env.rt.tools;
+    const write = (content: string) => tools.get('write_file')!.execute({ path: 'notes.md', content }, ctx);
+    writeFileSync(join(env.workspace, 'notes.md'), 'the user wrote this\n');
+
+    let r = await write('mine\n');
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/have not read it/);
+    expect(readFileSync(join(env.workspace, 'notes.md'), 'utf8')).toBe('the user wrote this\n');
+
+    await tools.get('read_file')!.execute({ path: 'notes.md' }, ctx);
+    expect((await write('mine\n')).isError).toBeFalsy();
+    // its own write keeps it current
+    expect((await write('mine again\n')).isError).toBeFalsy();
+
+    // someone else edits the file
+    await new Promise((res) => setTimeout(res, 20));
+    writeFileSync(join(env.workspace, 'notes.md'), 'edited meanwhile by the user\n');
+    r = await write('stale\n');
+    expect(r.content).toMatch(/changed on disk since you last read it/);
+    expect(readFileSync(join(env.workspace, 'notes.md'), 'utf8')).toBe('edited meanwhile by the user\n');
+    // a deliberate second attempt goes through; new files are never blocked
+    expect((await write('overwrite on purpose\n')).isError).toBeFalsy();
+    expect((await tools.get('write_file')!.execute({ path: 'fresh.md', content: 'x' }, ctx)).isError).toBeFalsy();
   });
 });

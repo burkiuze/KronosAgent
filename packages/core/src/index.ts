@@ -55,4 +55,5 @@ export { newId, sleep, formatDuration, formatTokens, formatCost, deepMerge, getP
 export { configureLogger, logger } from './util/log.js';
 
 export const KRONOS_VERSION = '1.0.0';
+export * from './review/index.js';
 export { GitHubService, GitHubError, parseGitHubRemote, type GitHubAppCredentials, type GitHubRepo, type GitHubStatus } from './github/github.js';

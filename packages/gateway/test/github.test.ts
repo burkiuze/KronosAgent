@@ -28,6 +28,7 @@ let rt: Kronos;
 let gw: Gateway;
 const calls: { method: string; path: string; auth: string; body: Record<string, unknown> }[] = [];
 let deviceTries = 0;
+let prHead = '';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 
@@ -59,6 +60,8 @@ function fakeGitHub(): Server {
       if (m(/^POST \/repos\/acme\/widgets\/issues\/\d+\/comments$/)) return send(201, { id: 1001, html_url: 'https://github.com/acme/widgets/issues/5#c1001' });
       if (m(/^PATCH \/repos\/acme\/widgets\/issues\/comments\/1001$/)) return send(200, { id: 1001 });
       if (m(/^GET \/repos\/acme\/widgets\/issues\/\d+\/comments$/)) return send(200, []);
+      if (m(/^GET \/repos\/acme\/widgets\/pulls\/7$/)) return send(200, { number: 7, title: 'Add a counter', body: 'Counts widgets.', head: { sha: prHead, ref: 'counter', repo: { full_name: 'acme/widgets' } }, base: { ref: 'main' } });
+      if (m(/^POST \/repos\/acme\/widgets\/pulls\/7\/reviews$/)) return send(200, { id: 1, html_url: 'https://github.com/acme/widgets/pull/7#pullrequestreview-1' });
       if (m(/^POST \/repos\/acme\/widgets\/pulls$/)) return send(201, { number: 12, html_url: 'https://github.com/acme/widgets/pull/12' });
       // "Connect GitHub" (device flow through the official app)
       if (m(/^POST \/login\/device\/code$/)) return body.client_id === 'Iv1.official' ? send(200, { device_code: 'dc-1', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', interval: 1, expires_in: 900 }) : send(400, { error: 'unauthorized_client' });
@@ -218,6 +221,57 @@ describe('GitHub', () => {
     const branch = String(pr?.body.head);
     expect(git(bare, 'show', `${branch}:FIX.md`)).toBe('The widgets are fixed.');
     expect(git(bare, 'log', '-1', '--format=%an <%ae>', branch)).toBe('kronos-test[bot] <99+kronos-test[bot]@users.noreply.github.com>');
+  }, 30_000);
+
+  it('reviews a pull request on "@kronos review" with inline comments', async () => {
+    // pull request #7 on "GitHub": refs/pull/7/head adds counter.js with a bug
+    const work = join(root, 'pr-src');
+    execFileSync('git', ['clone', '-q', join(root, 'remote', 'acme', 'widgets.git'), work]);
+    git(work, 'checkout', '-q', '-b', 'counter');
+    writeFileSync(join(work, 'counter.js'), 'let n = 0;\nexport function inc() {\n  n + 1;\n  return n;\n}\n');
+    git(work, 'add', '.');
+    git(work, 'commit', '-q', '-m', 'counter');
+    git(work, 'push', '-q', 'origin', 'HEAD:refs/pull/7/head');
+    prHead = git(work, 'rev-parse', 'HEAD');
+
+    const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    (rt.providers as unknown as { cache: Map<string, Provider> }).cache.set('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (req.system.startsWith('You are the fact-checker')) return { parts: [{ type: 'text', text: '{"results": [{"id": "F1", "verdict": "keep", "reason": "n is never assigned"}]}' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        const done = req.messages.flatMap((m) => m.parts).filter((p) => p.type === 'tool_result').length;
+        const call = (name: string, input: Record<string, unknown>): ChatResponse => ({ parts: [{ type: 'tool_call', id: `r${done}`, name, input } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' });
+        if (done === 0) return call('review_comment', { path: 'counter.js', start_line: 3, existing_code: 'n + 1;', title: 'inc() never increments', body: '`n + 1;` discards the result, so inc() always returns 0.', severity: 'high', category: 'bug', suggestion: '  n += 1;' });
+        if (done === 1) return call('review_done', { reviewed_files: ['counter.js'], verdict: 'incorrect', summary: 'The counter never counts.' });
+        return { parts: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+
+    const payload = { ...issueComment({ body: '@kronos review' }), issue: { number: 7, title: 'Add a counter', body: 'Counts widgets.', pull_request: {}, html_url: 'https://github.com/acme/widgets/pull/7', author_association: 'OWNER', user: { login: 'ada' } } };
+    expect((await deliver('issue_comment', payload, 'd-review')).status).toBe(202);
+    let review: (typeof calls)[number] | undefined;
+    for (let i = 0; i < 200 && !review; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      review = calls.find((c) => c.method === 'POST' && c.path === '/repos/acme/widgets/pulls/7/reviews');
+    }
+    expect(review, JSON.stringify(calls.slice(-5))).toBeDefined();
+    expect(review?.auth).toBe('Bearer ghs_installation');
+    expect(review?.body).toMatchObject({ commit_id: prHead, event: 'COMMENT' });
+    const comments = review?.body.comments as { path: string; line: number; side: string; body: string }[];
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({ path: 'counter.js', line: 3, side: 'RIGHT' });
+    expect(comments[0]!.body).toContain('```suggestion\n  n += 1;\n```');
+    expect(String(review?.body.body)).toContain('Not ready to merge');
+    // nothing was pushed: a review changes no code
+    expect(calls.some((c) => c.path === '/repos/acme/widgets/pulls' && c.method === 'POST' && calls.indexOf(c) > calls.indexOf(review!))).toBe(false);
+    let edited: (typeof calls)[number] | undefined;
+    for (let i = 0; i < 100 && !edited; i++) {
+      edited = calls.slice(calls.indexOf(review!)).find((c) => c.method === 'PATCH' && c.path === '/repos/acme/widgets/issues/comments/1001');
+      if (!edited) await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(String(edited?.body.body)).toContain('Review done');
+    // the throwaway worktree is gone
+    expect(existsSync(join(rt.paths.root, 'repos', 'acme', 'widgets', '.git', 'kronos-review', 'pr-7'))).toBe(false);
   }, 30_000);
 
   it('lets the agent clone, push and open pull requests with the github tool', async () => {

@@ -223,13 +223,39 @@ export interface KronosConfig {
       mode: PermissionMode;
       model: string | null;
       maxMinutes: number;
+      /** review every new pull request automatically (inline comments; nothing is changed) */
+      autoReview: boolean;
     };
+  };
+  /** code review (`kronos review`, the code_review tool, "@kronos review" on pull requests) */
+  review: {
+    /** model for the reviewers (null: the default model) */
+    model: string | null;
+    /** a second pass that tries to refute every finding and drops the ones it disproves */
+    verify: boolean;
+    verifyModel: string | null;
+    /** findings below this severity are not reported */
+    minSeverity: 'critical' | 'high' | 'medium' | 'low';
+    /** findings the reviewer itself rates below this confidence (0-1) are not reported */
+    minConfidence: number;
+    /** related files reviewed together by one reviewer */
+    maxFilesPerGroup: number;
+    maxGroupLines: number;
+    /** files with more changed lines are listed but not reviewed */
+    maxFileLines: number;
+    /** reviewers running at the same time */
+    concurrency: number;
+    /** groups with more changed lines first get a short risk plan */
+    planThreshold: number;
+    maxIterations: number;
+    include: string[];
+    exclude: string[];
   };
 }
 
 export const ALL_TOOLSETS = [
   'files', 'shell', 'web', 'browser', 'code', 'memory', 'sessions', 'todo', 'clarify', 'delegate', 'skills',
-  'cron', 'image', 'vision', 'voice', 'artifacts', 'messaging', 'http', 'mcp', 'github',
+  'cron', 'image', 'vision', 'voice', 'artifacts', 'messaging', 'http', 'mcp', 'github', 'review',
 ] as const;
 
 export function defaultConfig(): KronosConfig {
@@ -345,7 +371,22 @@ export function defaultConfig(): KronosConfig {
       reposDir: '',
       shellAuth: true,
       officialApp: { slug: '', clientId: '' },
-      bot: { enabled: true, trigger: '@kronos', allowed: ['OWNER', 'MEMBER', 'COLLABORATOR'], mode: 'yolo', model: null, maxMinutes: 30 },
+      bot: { enabled: true, trigger: '@kronos', allowed: ['OWNER', 'MEMBER', 'COLLABORATOR'], mode: 'yolo', model: null, maxMinutes: 30, autoReview: false },
+    },
+    review: {
+      model: null,
+      verify: true,
+      verifyModel: null,
+      minSeverity: 'low',
+      minConfidence: 0.3,
+      maxFilesPerGroup: 8,
+      maxGroupLines: 1500,
+      maxFileLines: 3000,
+      concurrency: 3,
+      planThreshold: 300,
+      maxIterations: 40,
+      include: [],
+      exclude: [],
     },
   };
 }

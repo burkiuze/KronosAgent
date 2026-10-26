@@ -21,7 +21,7 @@ const SHORT: Record<string, string> = {
 /** Small argv parser: positionals, --flag, --flag=value, --flag value, -x value, --no-flag, `--` passthrough. */
 export function parseArgs(argv: string[], booleanFlags: string[] = []): ParsedArgs {
   const out: ParsedArgs = { _: [], flags: {}, rest: [] };
-  const bools = new Set(['help', 'version', 'verbose', 'json', 'yolo', 'plan', 'continue', 'quiet', 'open', 'no-open', 'stream', 'hidden', 'user', 'force', 'check', ...booleanFlags]);
+  const bools = new Set(['help', 'version', 'verbose', 'json', 'yolo', 'plan', 'continue', 'quiet', 'open', 'no-open', 'stream', 'hidden', 'user', 'force', 'check', 'staged', 'post', 'request-changes', 'show-dropped', ...booleanFlags]);
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i] as string;
     if (a === '--') {
