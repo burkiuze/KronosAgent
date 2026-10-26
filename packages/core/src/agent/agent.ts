@@ -34,6 +34,7 @@ import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
 import { LoopWatch } from './watchdog.js';
 import { formatSyntaxProblems, syntaxProblems } from '../tools/diagnostics.js';
+import { formatLspErrors } from '../tools/lsp.js';
 import { describeArgs, exampleArgs, resolveToolName, suggestTools } from '../providers/toolcalls.js';
 import { PermissionPolicy, primaryArg } from '../safety/permissions.js';
 import { validateInput } from '../util/schema.js';
@@ -1052,6 +1053,22 @@ export class Agent {
         }
       },
     };
+    // the edited files as they were, for the language-server diagnostics delta
+    const lspOn = this.rt.config.agent.lsp === 'auto' && EDIT_TOOLS.has(call.name);
+    const before = new Map<string, string | null>();
+    if (lspOn) {
+      const targets = [input.path, input.file_path].filter((p): p is string => typeof p === 'string');
+      if (call.name === 'apply_patch' && typeof input.patch === 'string') for (const m of input.patch.matchAll(/^(?:\*\*\* (?:Update|Add) File: |\+\+\+ b\/)(.+)$/gm)) targets.push((m[1] as string).trim());
+      for (const t of targets.slice(0, 10)) {
+        const abs = isAbsolute(t) ? t : resolve(this.session.cwd, t);
+        if (!this.rt.lsp.available(abs)) continue;
+        try {
+          before.set(abs, readFileSync(abs, 'utf8'));
+        } catch {
+          before.set(abs, null);
+        }
+      }
+    }
     let out;
     try {
       out = await def.execute(input as never, ctx);
@@ -1096,6 +1113,23 @@ export class Agent {
         content += formatSyntaxProblems(relative(this.session.cwd, abs) || abs, text, problems);
       }
       if (failed) meta = { ...meta, syntaxErrors: failed };
+      // semantic errors the edit introduced (only when the syntax is fine)
+      if (!failed && before.size) {
+        let semantic = 0;
+        for (const [abs, old] of before) {
+          let text: string;
+          try {
+            text = readFileSync(abs, 'utf8');
+          } catch {
+            continue;
+          }
+          const r = await this.rt.lsp.introduced(abs, old, text, this.session.cwd);
+          if (!r?.errors.length) continue;
+          semantic += r.errors.length;
+          content += formatLspErrors(relative(this.session.cwd, abs) || abs, r.server, r.errors);
+        }
+        if (semantic) meta = { ...meta, lspErrors: semantic };
+      }
     }
     // remember complete reads (output that was cut is not fully in context, so it does not count)
     const read = meta?.read as { key: string; mtimeMs: number; size: number; lines: number } | undefined;

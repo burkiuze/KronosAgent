@@ -105,6 +105,11 @@ export interface KronosConfig {
     /** parse files right after write/edit/patch and report syntax errors in the same tool result */
     editDiagnostics: boolean;
     /**
+     * "auto": also ask an installed language server (typescript-language-server, pyright, gopls,
+     * rust-analyzer, clangd) for the errors an edit introduced; servers stop after 5 idle minutes
+     */
+    lsp: 'auto' | 'off';
+    /**
      * lean mode for small models: the core tools only, short tool descriptions and a compact
      * prompt. 'auto' turns it on for context windows up to 32k tokens.
      */
@@ -332,6 +337,7 @@ export function defaultConfig(): KronosConfig {
       nudges: { memoryEvery: 12, skillAfterToolCalls: 18, learning: 'background' },
       verifyBeforeFinish: true,
       editDiagnostics: true,
+      lsp: 'off',
       lean: 'auto',
       budget: { maxTokens: 0, maxCostUsd: 0, maxMinutes: 0 },
     },

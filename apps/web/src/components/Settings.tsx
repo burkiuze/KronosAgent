@@ -111,6 +111,7 @@ const DEFS: Def[] = [
   { section: 'chat', key: 'agent.compaction.threshold', label: 'Compaction threshold', desc: 'Fraction of the context window that triggers compaction.', kind: 'number', min: 0.3, max: 0.95, step: 0.05 },
   { section: 'chat', key: 'agent.subagents.maxConcurrent', label: 'Parallel subagents', kind: 'number', min: 1, max: 16 },
   { section: 'chat', key: 'agent.subagents.maxDepth', label: 'Delegation depth', kind: 'number', min: 1, max: 4 },
+  { section: 'chat', key: 'agent.lsp', label: 'Language-server checks after edits', desc: 'Auto: after each edit, an installed language server (typescript-language-server, pyright, gopls, rust-analyzer, clangd) reports the type errors the edit introduced. Servers stop after 5 idle minutes.', kind: 'select', options: [{ value: 'off', label: 'Off' }, { value: 'auto', label: 'Auto (when installed)' }] },
   { section: 'chat', key: 'review.model', label: 'Code review model', desc: 'Model for /review and pull request reviews (empty = default model).', kind: 'model' },
   { section: 'chat', key: 'review.verify', label: 'Fact-check review findings', desc: 'A second pass tries to refute every finding against the code and drops the ones it disproves.', kind: 'toggle' },
   {
