@@ -35,6 +35,8 @@ kronos config path                 # where the file lives
 
 ### Providers
 
+Several keys for one provider (a key pool): separate them with commas, e.g. `OPENAI_API_KEY=sk-a,sk-b`. When a key is rate limited, out of quota or rejected, Kronos switches to the next one immediately (a rate-limited key cools down for at least a minute, a rejected one for six hours) before retrying or falling back to another model.
+
 `providers.<id>` accepts `apiKey`, `baseUrl`, `headers`, `models`, `enabled`. Built-in ids:
 `anthropic`, `openai`, `openrouter`, `gemini`, `groq`, `deepseek`, `mistral`, `xai`, `nvidia`,
 `together`, `fireworks`, `cerebras`, `nous`, `moonshot`, `zai`, `ollama`, `lmstudio`.

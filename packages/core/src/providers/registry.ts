@@ -76,12 +76,55 @@ export class ProviderRegistry {
     this.cache.clear();
   }
 
-  private keyFor(id: string): string | undefined {
+  /** The configured key text: one key, or several separated by commas/newlines (a key pool). */
+  private rawKeyFor(id: string): string | undefined {
     const cfg = this.config.providers[id];
     if (cfg?.apiKey) return cfg.apiKey;
     const custom = this.config.customProviders.find((c) => c.id === id);
     if (custom?.apiKey) return custom.apiKey;
     for (const k of getPreset(id)?.envKeys ?? []) if (process.env[k]) return process.env[k];
+    return undefined;
+  }
+
+  /** Every key of a provider (after Hermes' credential pool: rotate on rate limits and rejections). */
+  keysFor(id: string): string[] {
+    return [...new Set((this.rawKeyFor(id) ?? '').split(/[\s,]+/).filter(Boolean))];
+  }
+
+  private keyIndex = new Map<string, number>();
+  private keyCooldown = new Map<string, number>();
+
+  private keyFor(id: string): string | undefined {
+    const keys = this.keysFor(id);
+    if (keys.length <= 1) return keys[0] ?? this.rawKeyFor(id);
+    const start = this.keyIndex.get(id) ?? 0;
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[(start + i) % keys.length] as string;
+      if ((this.keyCooldown.get(k) ?? 0) <= Date.now()) return k;
+    }
+    return keys[start % keys.length];
+  }
+
+  /**
+   * After a rate limit, exhausted quota or a rejected key, move to the provider's next key that is not
+   * cooling down. Returns its position (1-based) and the pool size, or undefined when there is none.
+   */
+  rotateKey(id: string, err: ProviderError): { index: number; of: number; reason: string } | undefined {
+    const keys = this.keysFor(id);
+    if (keys.length < 2) return undefined;
+    const current = this.keyFor(id) as string;
+    const reason = err.status === 429 ? 'rate limited' : err.status === 402 || /quota|credit|billing/i.test(err.message) ? 'out of quota' : 'rejected';
+    const coolMs = err.status === 429 ? Math.max(err.retryAfterMs ?? 0, 60_000) : 6 * 3600_000;
+    this.keyCooldown.set(current, Date.now() + coolMs);
+    const at = keys.indexOf(current);
+    for (let i = 1; i < keys.length; i++) {
+      const j = (at + i) % keys.length;
+      if ((this.keyCooldown.get(keys[j] as string) ?? 0) <= Date.now()) {
+        this.keyIndex.set(id, j);
+        this.cache.delete(id);
+        return { index: j + 1, of: keys.length, reason };
+      }
+    }
     return undefined;
   }
 
@@ -135,8 +178,8 @@ export class ProviderRegistry {
     if (custom) {
       provider =
         custom.api === 'anthropic'
-          ? new AnthropicProvider({ id, apiKey: apiKey ?? custom.apiKey, baseUrl: custom.baseUrl, headers: custom.headers, serverFallbacks: false })
-          : new OpenAICompatProvider({ id, label: custom.label, baseUrl: custom.baseUrl, apiKey: apiKey ?? custom.apiKey, headers: custom.headers, flavor: 'generic' });
+          ? new AnthropicProvider({ id, apiKey: apiKey ?? this.keyFor(id), baseUrl: custom.baseUrl, headers: custom.headers, serverFallbacks: false })
+          : new OpenAICompatProvider({ id, label: custom.label, baseUrl: custom.baseUrl, apiKey: apiKey ?? this.keyFor(id), headers: custom.headers, flavor: 'generic' });
     } else if (!preset) {
       throw new ProviderError(`Unknown provider "${id}". Known: ${this.knownProviderIds().join(', ')}`, id);
     } else if (preset.api === 'demo') {
@@ -321,13 +364,22 @@ export class ProviderRegistry {
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
           if (attempt > 1) restart();
-          const res = await provider.chat({ ...req, model }, track);
+          const res = await this.get(model.provider).chat({ ...req, model }, track);
           this.health.delete(model.provider);
           return { ...res, modelInfo: model };
         } catch (e) {
           lastErr = e;
           if (isAbortError(e) || req.signal?.aborted) throw e;
           if (e instanceof MissingCredentialsError) break;
+          // a pool of keys: switch to the next one right away instead of waiting or falling back
+          if (e instanceof ProviderError && (e.status === 429 || e.status === 401 || e.status === 403 || e.status === 402)) {
+            const next = this.rotateKey(model.provider, e);
+            if (next) {
+              onEvent({ type: 'notice', level: 'warn', text: `${model.provider}: key ${next.reason} — switched to key ${next.index} of ${next.of}.` });
+              attempt -= 1;
+              continue;
+            }
+          }
           const retryable = e instanceof ProviderError ? e.retryable : true;
           if (!retryable || attempt === maxAttempts) {
             failed = retryable;
