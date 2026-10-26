@@ -578,8 +578,15 @@ export class Kronos {
     }
     const files: FilePart[] = [];
     const images: ImagePart[] = [];
+    // @diff, @staged, @git:<rev>, @url:<address> (after Hermes' context references)
+    for (const mm of out.matchAll(/(^|\s)@(diff|staged|git:[^\s]+|url:[^\s]+)(?=\s|$)/g)) {
+      const ref = mm[2] as string;
+      const text = await this.contextReference(ref, cwd).catch((e) => `(could not load @${ref}: ${(e as Error).message})`);
+      if (text) files.push({ type: 'file', name: `@${ref}`, mediaType: 'text/plain', path: '', text: truncate(text, 200_000), size: text.length });
+    }
     for (const mm of out.matchAll(/(^|\s)@([\w./~-][^\s]*)/g)) {
       const raw = mm[2] as string;
+      if (/^(diff|staged)$|^(git|url):/.test(raw)) continue;
       const path = resolvePath(raw, cwd);
       if (!existsSync(path)) continue;
       try {
@@ -593,6 +600,30 @@ export class Kronos {
       }
     }
     return { text: out, files: files.length ? files : undefined, images: images.length ? images : undefined, command, meta: command ? { kind: 'command', command } : undefined };
+  }
+
+  /** Content behind @diff, @staged, @git:<rev> and @url:<address>. */
+  private async contextReference(ref: string, cwd: string): Promise<string> {
+    const { runProcess } = await import('./util/process.js');
+    const git = async (args: string[]) => {
+      const r = await runProcess('git', ['-c', 'core.quotepath=off', '--no-pager', ...args], { cwd, timeoutMs: 20_000, maxBuffer: 4 * 1024 * 1024 });
+      if (r.exitCode !== 0) throw new Error((r.stderr || r.output).trim().split('\n').pop() ?? 'git failed');
+      return r.stdout;
+    };
+    if (ref === 'diff') return (await git(['diff', 'HEAD', '--stat', '--patch'])) || '(no uncommitted changes)';
+    if (ref === 'staged') return (await git(['diff', '--cached', '--stat', '--patch'])) || '(nothing staged)';
+    if (ref.startsWith('git:')) {
+      const rev = ref.slice(4);
+      if (!/^[\w./~^@{}-]+$/.test(rev)) throw new Error('not a git revision');
+      return git(['show', '--stat', '--patch', rev]);
+    }
+    const { safeFetch } = await import('./util/urlsafety.js');
+    const { htmlToMarkdown } = await import('./util/html.js');
+    let url = ref.slice(4);
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+    const res = await safeFetch(url, { headers: { 'user-agent': this.config.web.fetch.userAgent }, signal: AbortSignal.timeout(30_000) });
+    const body = await res.text();
+    return /html/i.test(res.headers.get('content-type') ?? '') ? htmlToMarkdown(body, url).markdown : body;
   }
 
   // ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import { urlBlocked } from '../util/urlsafety.js';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { ToolDefinition } from './types.js';
@@ -66,6 +67,8 @@ export class BrowserManager {
       this.browser = await pw.chromium.launch({ headless: opts.headless, executablePath: opts.executablePath || process.env.KRONOS_CHROMIUM || undefined });
     }
     const context = await this.browser.newContext({ viewport: opts.viewport, userAgent: undefined });
+    // no page may reach cloud instance metadata, whatever a site's scripts or redirects try
+    await context.route(/^https?:\/\/(\[?(169\.254\.\d+\.\d+|fd00:ec2::254|fe80:[^/\]]*)\]?|100\.100\.100\.200|metadata\.google\.internal|metadata)(:\d+)?(\/|$)/i, (route: { abort: () => Promise<void> }) => route.abort());
     const page = await context.newPage();
     this.pages.set(sessionId, page);
     return page;
@@ -163,6 +166,10 @@ export const browserTool: ToolDefinition<{
       case 'navigate': {
         if (!input.url) return { content: 'url is required', isError: true };
         const url = /^https?:|^file:|^about:/.test(input.url) ? input.url : `https://${input.url}`;
+        if (/^https?:/.test(url)) {
+          const why = await urlBlocked(url);
+          if (why) return { content: `Blocked: ${why}`, isError: true };
+        }
         const res = await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
         await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
         ctx.runtime.artifacts.add({ kind: 'link', title: (await page.title()) || url, location: page.url(), sessionId: ctx.sessionId, sessionTitle: ctx.agent.title });

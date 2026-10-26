@@ -1,3 +1,4 @@
+import { safeFetch } from '../util/urlsafety.js';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -193,9 +194,8 @@ export const webFetchTool: ToolDefinition<{ url: string; focus?: string; start_i
     if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
     const cfg = ctx.runtime.config.web.fetch;
     const maxChars = input.max_chars ?? cfg.maxChars;
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: { 'user-agent': cfg.userAgent, accept: 'text/html,application/xhtml+xml,application/json,text/plain,application/pdf;q=0.9,*/*;q=0.8' },
-      redirect: 'follow',
       signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(45_000)]),
     });
     const ctype = res.headers.get('content-type') ?? '';
@@ -269,7 +269,7 @@ export const httpRequestTool: ToolDefinition<{ method?: string; url: string; hea
       body = JSON.stringify(input.json);
       headers['content-type'] ??= 'application/json';
     }
-    const res = await fetch(input.url, { method: (input.method ?? 'GET').toUpperCase(), headers, body, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(60_000)]) });
+    const res = await safeFetch(input.url, { method: (input.method ?? 'GET').toUpperCase(), headers, body, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(60_000)]) });
     const text = await res.text();
     let pretty = text;
     if ((res.headers.get('content-type') ?? '').includes('json')) {

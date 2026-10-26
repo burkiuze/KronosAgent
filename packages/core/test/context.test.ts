@@ -423,3 +423,24 @@ describe('persistent kernels', () => {
     env.rt.kernels.stopSession(s.id);
   }, 30_000);
 });
+
+describe('context references', () => {
+  it('expands @diff, @staged and @git:<rev> into attached text', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: env.workspace, stdio: 'pipe' });
+    git('init', '-q');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    writeFileSync(join(env.workspace, 'a.txt'), 'one\n');
+    git('add', '.');
+    git('commit', '-qm', 'first commit');
+    writeFileSync(join(env.workspace, 'a.txt'), 'two\n');
+    const input = await env.rt.expandInput('explain @diff and @git:HEAD please', env.workspace);
+    const names = (input.files ?? []).map((f) => f.name);
+    expect(names).toEqual(['@diff', '@git:HEAD']);
+    expect(input.files?.[0]?.text).toContain('+two');
+    expect(input.files?.[1]?.text).toContain('first commit');
+    expect((await env.rt.expandInput('@staged', env.workspace)).files?.[0]?.text).toBe('(nothing staged)');
+    expect((await env.rt.expandInput('@git:$(rm)', env.workspace)).files?.[0]?.text).toMatch(/could not load/);
+  });
+});
