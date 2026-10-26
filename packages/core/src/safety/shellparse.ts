@@ -14,6 +14,8 @@ export interface Redirect {
 export interface ParsedShell {
   /** simple commands, words unquoted */
   commands: string[][];
+  /** the operator after each command: "|", "&&", "||", ";", "&" or "" (end) */
+  ops: string[];
   /** $(…), `…`, <(…), >(…) */
   substitution: boolean;
   /** $VAR / ${VAR} expansions in words */
@@ -28,7 +30,7 @@ export interface ParsedShell {
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'select', '!', '[[', ']]', '{', '}']);
 
 export function parseShell(script: string): ParsedShell {
-  const out: ParsedShell = { commands: [], substitution: false, expansion: false, redirects: [], complex: false, error: false };
+  const out: ParsedShell = { commands: [], ops: [], substitution: false, expansion: false, redirects: [], complex: false, error: false };
   let words: string[] = [];
   let word = '';
   let inWord = false;
@@ -39,12 +41,13 @@ export function parseShell(script: string): ParsedShell {
     word = '';
     inWord = false;
   };
-  const endCommand = () => {
+  const endCommand = (op = '') => {
     endWord();
     if (words.length) {
       if (KEYWORDS.has(words[0] as string) || /^\w+\(\)$/.test(words[0] as string)) out.complex = true;
       out.commands.push(words);
-    }
+      out.ops.push(op);
+    } else if (op && out.ops.length && !out.ops[out.ops.length - 1]) out.ops[out.ops.length - 1] = op;
     words = [];
   };
   const readUntilClose = (open: string, close: string): void => {
@@ -188,7 +191,8 @@ export function parseShell(script: string): ParsedShell {
       continue;
     }
     if (c === '|' || c === ';' || c === '&' || c === '\n') {
-      endCommand();
+      const two = s.slice(i, i + 2);
+      endCommand(two === '||' || two === '&&' || two === ';;' ? two : c === '\n' ? ';' : c);
       if (c === '&' && s[i + 1] !== '&') out.complex = true; // background job
       if ((c === '|' && s[i + 1] === '|') || (c === '&' && s[i + 1] === '&') || (c === ';' && s[i + 1] === ';')) i++;
       i++;

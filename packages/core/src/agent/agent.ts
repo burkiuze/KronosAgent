@@ -30,6 +30,7 @@ import { reviewAction } from '../safety/guardian.js';
 import { describeHit } from '../safety/osv.js';
 import { deferredTools } from '../tools/toolsearch.js';
 import { LEARNING_REVIEWER, hasLearningSignal } from './learning.js';
+import { checkRun, isNonCodePath } from './evidence.js';
 import { recapTranscript } from '../memory/recaps.js';
 import { detectProjectChecks } from './checks.js';
 import { TeamBoard } from './board.js';
@@ -1084,10 +1085,20 @@ export class Agent {
       out = { content: isAbortError(e) ? 'Interrupted by the user.' : `Error: ${errorMessage(e)}`, isError: true };
     }
     if (!out.isError && def.toolset === 'files' && resolveRisk(def, input) === 'write') {
-      this.editsSinceVerify += 1;
+      // documentation edits need no test run
+      const touched = [...((out.meta?.paths as string[] | undefined) ?? []), ...(typeof out.meta?.path === 'string' ? [out.meta.path] : [])];
+      if (!touched.length || touched.some((p) => !isNonCodePath(p))) this.editsSinceVerify += 1;
       this.readCache.clear();
     }
-    let content = out.content ?? '';
+    // the project's checks run from the shell count as verification — when their status is really theirs
+    let checkNote = '';
+    if (call.name === 'shell' && typeof input.command === 'string' && !input.background && out.meta && typeof out.meta.exitCode === 'number') {
+      const run = checkRun(input.command);
+      if (run?.attributable) this.noteVerification(out.meta.exitCode === 0);
+      else if (run && out.meta.exitCode === 0)
+        checkNote = `\n\nNote: this exit status is ${run.maskedBy === '|| true' ? 'forced to 0 by `|| true`' : `the one of \`${run.maskedBy ?? 'the last command'}\`, not of the ${run.kind}`} — it does not show whether the ${run.kind} passed. Read the output above, or re-run with \`set -o pipefail;\` or without the pipe.`;
+    }
+    let content = (out.content ?? '') + checkNote;
     if (this.rt.config.safety.redactSecrets) content = redactSecrets(content);
     const limit = this.rt.config.agent.toolOutputLimit;
     let meta = out.meta;
