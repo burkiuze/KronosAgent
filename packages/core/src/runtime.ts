@@ -18,6 +18,7 @@ import { codeReviewTool } from './review/tool.js';
 import { toolSearchTool } from './tools/toolsearch.js';
 import { SessionRecaps } from './memory/recaps.js';
 import { LspManager } from './tools/lsp.js';
+import { KernelManager } from './tools/kernel.js';
 import { validateValue } from './util/schema.js';
 import type { ToolDefinition } from './tools/types.js';
 import { shellTools } from './tools/shell.js';
@@ -127,6 +128,7 @@ export class Kronos {
   review!: ReviewEngine;
   recaps!: SessionRecaps;
   readonly lsp = new LspManager();
+  readonly kernels = new KernelManager();
   messaging?: MessagingBridge;
   private agents = new Map<string, Agent>();
   private background = new Set<Promise<unknown>>();
@@ -402,6 +404,7 @@ export class Kronos {
   }
 
   deleteSession(sessionId: string): void {
+    this.kernels.stopSession(sessionId);
     this.agents.get(sessionId)?.interrupt();
     this.agents.delete(sessionId);
     this.sessions.delete(sessionId);
@@ -640,6 +643,7 @@ export class Kronos {
 
   async close(): Promise<void> {
     this.lsp.close();
+    this.kernels.close();
     this.cron.stop();
     for (const a of this.agents.values()) a.interrupt();
     await Promise.race([Promise.allSettled([...this.background]), new Promise((r) => setTimeout(r, 5000))]);

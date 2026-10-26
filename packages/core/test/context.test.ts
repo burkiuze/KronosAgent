@@ -398,3 +398,28 @@ describe('learning review', () => {
     expect(env.rt.sessions.messages(s.id).some((m) => m.role === 'system')).toBe(false);
   });
 });
+
+describe('persistent kernels', () => {
+  it('keep Python and JavaScript state between calls, and reset or die cleanly', async () => {
+    const s = env.rt.createSession({ source: 'test' });
+    const ctx = { runtime: env.rt, agent: env.rt.agent(s.id), sessionId: s.id, cwd: env.workspace, signal: new AbortController().signal, toolCallId: 't', turn: 0, progress() {}, askUser: async () => '', checkpoint() {} } as never;
+    const run = (language: string, code: string, extra: Record<string, unknown> = {}) => env.rt.tools.get('execute_code')!.execute({ language, code, persistent: true, ...extra }, ctx);
+    let r = await run('python', 'import math\nrows = [1, 2, 3]\nprint("loaded")');
+    expect(r.content).toMatch(/^\[python kernel · cell 1 · new kernel/);
+    expect(r.content).toContain('loaded');
+    r = await run('python', 'sum(rows) * math.pi');
+    expect(r.content).toMatch(/cell 2\]\nOut: 18\.84955592153876/);
+    r = await run('python', '1/0');
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('ZeroDivisionError');
+    expect((await run('python', 'len(rows)')).content).toContain('Out: 3'); // an error does not lose state
+    expect((await run('python', 'rows', { reset: true })).content).toMatch(/new kernel[\s\S]*NameError/);
+    r = await run('python', 'import time\ntime.sleep(5)', { timeout: 1 });
+    expect(r.content).toMatch(/timed out after 1s — its state is gone/);
+    expect((await run('python', 'print("back")')).content).toMatch(/new kernel[\s\S]*back/);
+    await run('javascript', 'const seen = new Set([1, 2]); console.log("js up")');
+    r = await run('javascript', 'seen.add(3); await new Promise((r) => setTimeout(r, 10)); return seen.size');
+    expect(r.content).toMatch(/cell 2\]\nOut: 3/);
+    env.rt.kernels.stopSession(s.id);
+  }, 30_000);
+});

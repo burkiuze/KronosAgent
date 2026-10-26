@@ -12,6 +12,7 @@ function truncateTail(text: string, max = 6000): string {
 }
 import { formatDuration } from '../util/misc.js';
 import { detectProjectChecks, failureHighlights, type ProjectCheck } from '../agent/checks.js';
+import { ensureNetworkProxy, proxiedNetwork, runningNetworkProxy, wrapCommand } from '../backends/sandbox.js';
 
 function formatRun(r: { output: string; exitCode: number | null; signal: NodeJS.Signals | null; timedOut: boolean; aborted: boolean; durationMs: number; adopted?: string }, timeoutSec: number): string {
   const out = r.output.replace(/\s+$/, '');
@@ -145,19 +146,23 @@ const RUNNERS: Record<string, { file: string; bins: string[]; args: (f: string) 
   bash: { file: 'main.sh', bins: ['bash', 'sh'], args: (f) => [f] },
 };
 
-export const executeCodeTool: ToolDefinition<{ language: 'python' | 'javascript' | 'typescript' | 'bash'; code: string; timeout?: number }> = {
+export const executeCodeTool: ToolDefinition<{ language: 'python' | 'javascript' | 'typescript' | 'bash'; code: string; timeout?: number; persistent?: boolean; reset?: boolean }> = {
   name: 'execute_code',
   toolset: 'code',
   risk: 'execute',
   description:
     'Execute a self-contained Python, JavaScript (Node ESM), TypeScript or Bash script and return its output. Good for calculations, data processing, ' +
-    'parsing files and chaining many steps in one call. The working directory is the session workspace.',
+    'parsing files and chaining many steps in one call. The working directory is the session workspace. ' +
+    'persistent: true (Python/JavaScript) runs the code in this conversation\'s kernel, so variables, imports and loaded data stay for the next call ' +
+    '(like a notebook; the value of a final expression is shown). reset: true starts a fresh kernel.',
   parameters: {
     type: 'object',
     properties: {
       language: { type: 'string', enum: ['python', 'javascript', 'typescript', 'bash'] },
       code: { type: 'string' },
       timeout: { type: 'integer', minimum: 1, maximum: 1800, description: 'Seconds (default 120).' },
+      persistent: { type: 'boolean', description: 'Keep state between calls (python, javascript).' },
+      reset: { type: 'boolean', description: 'With persistent: discard the kernel state first.' },
     },
     required: ['language', 'code'],
   },
@@ -168,6 +173,37 @@ export const executeCodeTool: ToolDefinition<{ language: 'python' | 'javascript'
     let bin: string | null = null;
     for (const b of runner.bins) if ((bin = await which(b))) break;
     if (!bin && ctx.runtime.config.terminal.backend === 'local') return { content: `${input.language} runtime not found (${runner.bins.join('/')})`, isError: true };
+    if (input.persistent && (input.language === 'python' || input.language === 'javascript') && bin && ctx.runtime.config.terminal.backend === 'local') {
+      const timeoutSec = input.timeout ?? 120;
+      const sandbox = ctx.runtime.config.terminal.sandbox;
+      const sandboxed = sandbox && sandbox.mode !== 'off';
+      if (sandboxed && proxiedNetwork(sandbox)) await ensureNetworkProxy(sandbox);
+      const r = await ctx.runtime.kernels.run({
+        sessionId: ctx.sessionId,
+        language: input.language,
+        bin: input.language === 'javascript' ? process.execPath : bin,
+        cwd: ctx.cwd,
+        code: input.code,
+        timeoutMs: timeoutSec * 1000,
+        reset: input.reset,
+        signal: ctx.signal,
+        wrap: sandboxed
+          ? (file, args) => {
+              const w = wrapCommand(file, args, ctx.cwd, sandbox, runningNetworkProxy()?.port);
+              return 'error' in w && sandbox.fallback === 'unsandboxed' ? { file, args } : w;
+            }
+          : undefined,
+      });
+      const head = `[${input.language} kernel · cell ${r.count}${r.fresh ? ' · new kernel (no earlier state)' : ''}]`;
+      const lost = r.status === 'timeout' || r.status === 'interrupted' || r.status === 'died';
+      const body = [
+        r.output.replace(/\s+$/, ''),
+        r.value ? `Out: ${r.value}` : '',
+        r.error ? r.error.replace(/\s+$/, '') : '',
+        lost ? `[${r.status === 'timeout' ? `timed out after ${timeoutSec}s` : r.status === 'interrupted' ? 'interrupted' : 'the kernel exited'} — its state is gone; the next persistent call starts a fresh kernel]` : '',
+      ].filter(Boolean);
+      return { content: `${head}\n${truncate(body.join('\n') || '(no output)', 60_000)}`, isError: r.status !== 'ok', meta: { kernelCell: r.count, status: r.status } };
+    }
     const dir = mkdtempSync(join(tmpdir(), 'kronos-code-'));
     const file = join(dir, runner.file);
     writeFileSync(file, input.code);
