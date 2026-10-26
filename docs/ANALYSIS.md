@@ -262,6 +262,19 @@ memory — against Docker's daemon and a container per workspace.
 | Hermes | context_references | `@diff`, `@staged`, `@git:<rev>`, `@url:<address>` in prompts |
 | open-code-review | `ocr scan`, `--preview` | `kronos review --scan`, `--preview` |
 
+### Third pass: quality of the work, not just the toolbox
+
+Hermes and Codex mostly differ from weaker agents in *how* the model works, not in tool count.
+This pass targets the failure modes that make an agent's result untrustworthy:
+
+| Problem | In Kronos |
+|---|---|
+| "Done" without proof | `agent/evidence`: test, lint, typecheck and build runs are recognized from the parsed command line; a check whose exit code is masked (`| tail` without pipefail, `|| true`, `; echo`) does not count and the model is told so; edits to docs do not ask for verification |
+| Prompt injection from repo files, web pages, MCP output | `safety/threats` (after Hermes' threat patterns): context files with injections are not loaded, memory writes with exfiltration phrasing are refused, untrusted tool output gets a warning note |
+| Sloppy finishing | system prompt: finish the job, never invent results, "done" means every requirement checked, read back external writes, keep identifiers literal; repository etiquette (dirty worktree, no destructive git, no stray files); outcome-first reports. Models that tend to stop early get an extra execution-discipline block |
+| One model's blind spots | `/moa` and `model.advisors`: other models advise before key steps and after failures; the acting model decides |
+| Bugs the author does not see | `agent.selfReview`: when a run changed 15+ lines in a git repository, the review engine (independent reviewers plus the fact-checker) checks the uncommitted changes before the final answer, and confirmed problems go back to the agent once. Default: at the Codemaster effort level |
+
 ### Resource use
 
 Kronos keeps the "normal agent" footprint: a Node.js process (the gateway idles at a few tens of

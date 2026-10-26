@@ -472,3 +472,40 @@ describe('mixture of agents', () => {
     expect(messageText(notes[0]!)).toContain('Check the config file first');
   });
 });
+
+describe('self-review before finishing', () => {
+  it('reviews a run\'s code changes and hands confirmed findings back before the final answer', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: env.workspace, stdio: 'pipe' });
+    git('init', '-q');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    writeFileSync(join(env.workspace, 'README.md'), 'x\n');
+    git('add', '.');
+    git('commit', '-qm', 'init');
+    env.rt.updateConfig({ agent: { selfReview: 'always' } } as never);
+    const body = Array.from({ length: 20 }, (_, i) => `export const v${i} = ${i};`).join('\n') + '\nexport function avg(xs) { return xs.reduce((a, b) => a + b) / xs.length; }\n';
+    let reviews = 0;
+    let step = 0;
+    inject('kronos', {
+      id: 'kronos',
+      async chat(req): Promise<ChatResponse> {
+        if (req.system.startsWith('You are the fact-checker')) return { parts: [{ type: 'text', text: '{"results": [{"id": "F1", "verdict": "keep", "reason": "empty array throws"}]}' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        if (req.system.includes('exacting senior code reviewer')) {
+          reviews++;
+          return { parts: [{ type: 'text', text: '{"findings": [{"path": "stats.js", "start_line": 21, "existing_code": "export function avg(xs)", "title": "avg([]) throws", "body": "reduce without an initial value throws on an empty array.", "severity": "high", "category": "bug", "confidence": 0.9}], "verdict": "incorrect", "summary": "x"}' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        }
+        if (!req.tools.length) return { parts: [{ type: 'text', text: 'title' }], stopReason: 'end_turn', usage, model: 'scripted' };
+        step++;
+        if (step === 1) return { parts: [{ type: 'tool_call', id: 'w1', name: 'write_file', input: { path: 'stats.js', content: body } } as ToolCallPart], stopReason: 'tool_use', usage, model: 'scripted' };
+        return { parts: [{ type: 'text', text: step === 2 ? 'Added stats.js.' : 'Fixed avg for empty input.' }], stopReason: 'end_turn', usage, model: 'scripted' };
+      },
+    } as Provider);
+    const s = env.rt.createSession({ source: 'test' });
+    const r = await env.rt.agent(s.id).run('add a stats module');
+    expect(reviews).toBe(1);
+    const note = env.rt.sessions.messages(s.id).find((m) => messageText(m).startsWith('Before you finish: an independent review'));
+    expect(messageText(note!)).toMatch(/\[high\] stats\.js:21 — avg\(\[\]\) throws/);
+    expect(r.text).toBe('Fixed avg for empty input.');
+  });
+});

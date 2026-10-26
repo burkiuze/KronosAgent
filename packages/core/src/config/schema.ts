@@ -104,6 +104,11 @@ export interface KronosConfig {
     nudges: { memoryEvery: number; skillAfterToolCalls: number; learning: 'background' | 'inline' | 'off' };
     /** when a run edited files but never ran verify afterwards, ask for verification once before finishing */
     verifyBeforeFinish: boolean;
+    /**
+     * before finishing a run that changed code (≥ 15 lines), the review engine checks the uncommitted
+     * changes and the agent fixes what it confirms: "codemaster" (with Codemaster effort), "always", "off"
+     */
+    selfReview: 'off' | 'codemaster' | 'always';
     /** parse files right after write/edit/patch and report syntax errors in the same tool result */
     editDiagnostics: boolean;
     /**
@@ -341,6 +346,7 @@ export function defaultConfig(): KronosConfig {
       subagents: { maxConcurrent: 4, maxDepth: 2, maxIterations: 60 },
       nudges: { memoryEvery: 12, skillAfterToolCalls: 18, learning: 'background' },
       verifyBeforeFinish: true,
+      selfReview: 'codemaster',
       editDiagnostics: true,
       lsp: 'off',
       lean: 'auto',

@@ -105,6 +105,7 @@ const DEFS: Def[] = [
   { section: 'chat', key: 'agent.budget.maxTokens', label: 'Token limit per message', desc: '0 = no limit.', kind: 'number', min: 0, max: 100000000, step: 10000 },
   { section: 'chat', key: 'agent.budget.maxMinutes', label: 'Time limit per message (minutes)', desc: '0 = no limit.', kind: 'number', min: 0, max: 1440 },
   { section: 'chat', key: 'agent.verifyBeforeFinish', label: 'Verify before finishing', desc: 'When Kronos changed files but never ran the project checks, it is asked to verify once before it reports back.', kind: 'toggle' },
+  { section: 'chat', key: 'agent.selfReview', label: 'Self-review before finishing', desc: 'When a run changed 15+ lines in a git repository, the review engine checks the uncommitted changes and hands confirmed problems back before the final answer. "Codemaster" does this only at the Codemaster effort level.', kind: 'select', options: [{ value: 'off', label: 'Off' }, { value: 'codemaster', label: 'Codemaster only' }, { value: 'always', label: 'Always' }] },
   { section: 'chat', key: 'agent.parallelTools', label: 'Parallel tool calls', desc: 'Run independent read-only tools concurrently.', kind: 'toggle' },
   { section: 'chat', key: 'agent.autoTitle', label: 'Auto-title conversations', kind: 'toggle' },
   { section: 'chat', key: 'agent.toolOutputLimit', label: 'Tool output limit (chars)', desc: 'Longer output is truncated in the middle and saved to a file.', kind: 'number', min: 2000, max: 500000, step: 1000 },

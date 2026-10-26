@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import type {
   AgentEvent,
@@ -31,6 +31,7 @@ import { describeHit } from '../safety/osv.js';
 import { deferredTools } from '../tools/toolsearch.js';
 import { LEARNING_REVIEWER, hasLearningSignal } from './learning.js';
 import { checkRun, isNonCodePath } from './evidence.js';
+import { projectRoot } from '../backends/sandbox.js';
 import { injectionNote, scanThreats } from '../safety/threats.js';
 import { recapTranscript } from '../memory/recaps.js';
 import { detectProjectChecks } from './checks.js';
@@ -189,6 +190,9 @@ export class Agent {
   private contextEpoch = 0;
   /** files changed by write tools since the last verify call in this run */
   private editsSinceVerify = 0;
+  /** lines added + removed by edit tools in this run (self-review threshold) */
+  private linesChanged = 0;
+  private selfReviewed = false;
   private verifyNudged = false;
   /** weak-model nudges used in this run (empty replies, announced-but-not-called actions) */
   private replyNudges = { empty: 0, intent: 0 };
@@ -610,6 +614,8 @@ export class Agent {
     const signal = this.controller.signal;
 
     this.editsSinceVerify = 0;
+    this.linesChanged = 0;
+    this.selfReviewed = false;
     this.verifyNudged = false;
     this.bgNudged = false;
     const moa = Boolean(opts.moa || inp.meta?.command === 'moa');
@@ -819,6 +825,14 @@ export class Agent {
             this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: `Background agents ${pendingAgents.map((a) => `${a.id} (${a.label}, ${a.status})`).join(', ')} have results you have not collected. Call agents(action: "wait") to get them (or "stop" those you no longer need) before your final answer.` }], createdAt: Date.now(), meta: { kind: 'note' } }]);
             continue;
           }
+          if (res.stopReason === 'end_turn' && iter < maxIter && this.shouldSelfReview()) {
+            this.selfReviewed = true;
+            const note = await this.selfReview(signal).catch((e) => (log.debug('self-review failed', e), ''));
+            if (note) {
+              this.append([{ id: newId('m_'), role: 'system', parts: [{ type: 'text', text: note }], createdAt: Date.now(), meta: { kind: 'note' } }]);
+              continue;
+            }
+          }
           if (res.stopReason !== 'max_tokens' && iter < maxIter && this.shouldVerifyBeforeFinish()) {
             // verification is a property of the harness, not a request in the prompt
             this.verifyNudged = true;
@@ -915,6 +929,30 @@ export class Agent {
       return 'You described your next step but did not call a tool, so nothing happened. Call the tool now. If the task is already done, give your final answer instead.';
     }
     return undefined;
+  }
+
+  private shouldSelfReview(): boolean {
+    const mode = this.rt.config.agent.selfReview ?? 'off';
+    if (mode === 'off' || this.selfReviewed || this.depth > 0 || this.mode === 'plan' || this.linesChanged < 15) return false;
+    if (mode === 'codemaster' && !this.codemasterActive) return false;
+    return existsSync(join(projectRoot(this.session.cwd), '.git'));
+  }
+
+  /** Review this run's uncommitted changes; returns the note for the agent, or '' when nothing was found. */
+  private async selfReview(signal: AbortSignal): Promise<string> {
+    this.notice('info', `Reviewing the changes before finishing (${this.linesChanged} lines changed)…`);
+    const r = await this.rt.review.run({ cwd: this.session.cwd, spec: { kind: 'workspace' }, minSeverity: 'medium', parentSessionId: this.session.id, signal });
+    const found = r.findings.filter((f) => f.category !== 'style' && f.category !== 'documentation');
+    if (!found.length) {
+      this.notice('info', 'Self-review found no problems.');
+      return '';
+    }
+    this.notice('warn', `Self-review: ${found.length} finding${found.length === 1 ? '' : 's'} to check before finishing.`);
+    const list = found
+      .slice(0, 10)
+      .map((f) => `- [${f.severity}] ${f.path}:${f.startLine} — ${f.title}: ${truncate(f.body, 400)}${f.suggestion ? `\n  suggested: ${truncate(f.suggestion, 300)}` : ''}`)
+      .join('\n');
+    return `Before you finish: an independent review of the uncommitted changes found these possible problems.\n${list}\nFor each one in code you changed in this task: fix it if it is real (then re-run the relevant checks), or state briefly why it is not a problem. Ignore findings about changes that are not yours.`;
   }
 
   private shouldVerifyBeforeFinish(): boolean {
@@ -1110,7 +1148,10 @@ export class Agent {
     if (!out.isError && def.toolset === 'files' && resolveRisk(def, input) === 'write') {
       // documentation edits need no test run
       const touched = [...((out.meta?.paths as string[] | undefined) ?? []), ...(typeof out.meta?.path === 'string' ? [out.meta.path] : [])];
-      if (!touched.length || touched.some((p) => !isNonCodePath(p))) this.editsSinceVerify += 1;
+      if (!touched.length || touched.some((p) => !isNonCodePath(p))) {
+        this.editsSinceVerify += 1;
+        this.linesChanged += Number(out.meta?.added ?? 0) + Number(out.meta?.removed ?? 0);
+      }
       this.readCache.clear();
     }
     // the project's checks run from the shell count as verification — when their status is really theirs
