@@ -220,6 +220,7 @@ instructions. Project-specific skills, agents and commands live in `.kronos/skil
 | `github.apiUrl` / `github.webUrl` | `https://api.github.com` / `https://github.com` | GitHub Enterprise: your server's API and web URLs. |
 | `github.reposDir` | `''` | Where repositories are cloned (default `<profile>/repos`). |
 | `github.shellAuth` | `true` | Authenticate `git` in the agent's shell for GitHub checkouts. |
+| `github.officialApp` | `{slug: '', clientId: ''}` | The public Kronos GitHub App behind **Connect GitHub** (device flow — only its public client id is needed). |
 | `github.bot` | `{enabled: true, trigger: '@kronos', allowed: [OWNER, MEMBER, COLLABORATOR], mode: yolo, model: null, maxMinutes: 30}` | Answering mentions in issues and pull requests (needs the Kronos GitHub App and `gateway.publicUrl`). |
 
 The Kronos GitHub App's credentials live in `<profile>/github-app.json` (mode 600). See

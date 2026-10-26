@@ -7,9 +7,140 @@ import { Badge, Modal, Toggle } from './ui';
 
 interface GitHubStatus {
   connected: boolean;
-  user?: { login: string; name?: string; avatarUrl?: string; source: 'token' | 'gh' };
-  app?: { slug: string; name: string; htmlUrl: string; installUrl: string; installations: { id: number; account: string; repositories: 'all' | 'selected' }[]; webhook: boolean };
+  user?: { login: string; name?: string; avatarUrl?: string; source: 'kronos' | 'token' | 'gh' };
+  official?: { slug: string; installUrl: string; installations?: number };
+  app?: { slug: string; name: string; htmlUrl: string; installUrl: string; settingsUrl: string; installations: { id: number; account: string; repositories: 'all' | 'selected' }[]; webhook: boolean };
   error?: string;
+}
+
+/** "Connect GitHub" in one click: GitHub's device flow through the official Kronos app. */
+function ConnectGitHub({ status, onChanged }: { status: GitHubStatus | null; onChanged: () => Promise<void> }) {
+  const [flow, setFlow] = useState<{ handle: string; userCode: string; verificationUri: string; interval: number } | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const signedIn = status?.user?.source === 'kronos' ? status.user : undefined;
+
+  useEffect(() => {
+    if (!flow) return;
+    let stop = false;
+    let delay = flow.interval;
+    const tick = async () => {
+      if (stop) return;
+      try {
+        const r = await post<{ status: string; login?: string; interval?: number }>('/api/github/connect/poll', { handle: flow.handle });
+        if (r.status === 'done') {
+          toast(`Connected to GitHub as ${r.login}`, 'ok');
+          setFlow(null);
+          setWaiting(false);
+          await onChanged();
+          return;
+        }
+        if (r.status === 'expired' || r.status === 'denied') {
+          toast(r.status === 'denied' ? 'GitHub sign-in was cancelled' : 'The sign-in code expired — try again', 'error');
+          setFlow(null);
+          setWaiting(false);
+          return;
+        }
+        if (r.interval) delay = r.interval;
+      } catch (e) {
+        toast((e as Error).message, 'error');
+      }
+      setTimeout(() => void tick(), delay * 1000);
+    };
+    const t = setTimeout(() => void tick(), delay * 1000);
+    return () => {
+      stop = true;
+      clearTimeout(t);
+    };
+  }, [flow, onChanged]);
+
+  const start = async () => {
+    setWaiting(true);
+    try {
+      const f = await post<{ handle: string; userCode: string; verificationUri: string; interval: number }>('/api/github/connect/start');
+      setFlow(f);
+      setCopied(false);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+      setWaiting(false);
+    }
+  };
+  const copyAndOpen = async () => {
+    if (!flow) return;
+    try {
+      await navigator.clipboard.writeText(flow.userCode);
+      setCopied(true);
+    } catch {
+      /* clipboard blocked: the code is on screen */
+    }
+    window.open(flow.verificationUri, '_blank', 'noopener');
+  };
+
+  return (
+    <section className="gh-card gh-connect">
+      <div className="gh-connect-head">
+        <img src="./github-app-logo.png" alt="" width={44} height={44} className="gh-logo" />
+        <div>
+          <b>Connect GitHub</b>
+          <span className="gh-dim">Sign in once and Kronos can work on your repositories — clone, commit, push and open pull requests, shown on GitHub with the Kronos badge.</span>
+        </div>
+      </div>
+      {signedIn ? (
+        <>
+          <div className="gh-row gh-user">
+            {signedIn.avatarUrl && <img src={signedIn.avatarUrl} alt="" width={28} height={28} />}
+            <span>
+              Connected as <b>{signedIn.login}</b> <span className="gh-dim">through Kronos</span>
+            </span>
+            <span className="flex-1" />
+            <button
+              className="btn"
+              onClick={async () => {
+                await del('/api/github/token');
+                await onChanged();
+              }}
+            >
+              Disconnect
+            </button>
+          </div>
+          {status?.official && (
+            <div className="gh-actions">
+              <a className="btn primary" href={status.official.installUrl} target="_blank" rel="noreferrer">
+                {status.official.installations ? 'Choose repositories' : 'Install Kronos on your repositories'} <ExternalLink size={12} />
+              </a>
+              {status.official.installations === 0 && <span className="gh-dim">Pick the repositories Kronos may work on — then they show up under + → Open a GitHub repository.</span>}
+            </div>
+          )}
+        </>
+      ) : flow ? (
+        <div className="gh-device">
+          <span className="gh-dim">Enter this code on GitHub:</span>
+          <code className="gh-code">{flow.userCode}</code>
+          <div className="gh-actions">
+            <button className="btn primary" onClick={() => void copyAndOpen()}>
+              <Github size={14} /> {copied ? 'Code copied — open GitHub again' : 'Copy code & open GitHub'}
+            </button>
+            <button className="btn" onClick={() => (setFlow(null), setWaiting(false))}>
+              Cancel
+            </button>
+          </div>
+          <span className="gh-dim gh-wait">
+            <RefreshCw size={12} className="spin" /> Waiting for you to approve on GitHub…
+          </span>
+        </div>
+      ) : status?.official ? (
+        <div className="gh-actions">
+          <button className="btn primary gh-big" onClick={() => void start()} disabled={waiting}>
+            <Github size={16} /> Connect GitHub
+          </button>
+        </div>
+      ) : (
+        <p className="set-desc">
+          One-click connect uses the official Kronos GitHub App, which this build does not have configured yet. Until then, use your GitHub CLI login, a token or your own app below.
+        </p>
+      )}
+    </section>
+  );
 }
 
 interface Repo {
@@ -62,6 +193,7 @@ export function GitHubSettings() {
   const [busy, setBusy] = useState(false);
   const [publicUrl, setPublicUrl] = useState('');
   const [org, setOrg] = useState('');
+  const [isPublic, setIsPublic] = useState(false);
   useEffect(() => setPublicUrl(String(cfgGet('gateway.publicUrl', config) ?? '')), [config]);
   const bot = (cfgGet('github.bot', config) ?? {}) as { enabled?: boolean; trigger?: string };
 
@@ -82,7 +214,7 @@ export function GitHubSettings() {
   const createApp = async () => {
     setBusy(true);
     try {
-      const r = await post<{ action: string; manifest: Record<string, unknown> }>('/api/github/app/manifest', { baseUrl: window.location.origin, publicUrl: publicUrl.trim(), org: org.trim() });
+      const r = await post<{ action: string; manifest: Record<string, unknown> }>('/api/github/app/manifest', { baseUrl: window.location.origin, publicUrl: publicUrl.trim(), org: org.trim(), public: isPublic });
       postManifest(r.action, r.manifest);
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -92,15 +224,16 @@ export function GitHubSettings() {
 
   return (
     <div className="gh-settings">
+      <ConnectGitHub status={status} onChanged={load} />
       <p className="set-desc gh-intro">
-        Connect GitHub and Kronos can clone your repositories, push branches and open pull requests from any chat. Install the Kronos GitHub App and it also answers{' '}
-        <code>{bot.trigger || '@kronos'}</code> in issues and pull requests.
+        Advanced: run Kronos as <b>your own bot</b> (a GitHub App only you control — it also answers <code>{bot.trigger || '@kronos'}</code> in issues and pull requests when your gateway is reachable),
+        or connect with a personal token.
       </p>
 
       <section className="gh-card">
         <header>
           <Bot size={16} />
-          <b>Kronos GitHub App</b>
+          <b>Your own GitHub App (bot)</b>
           {status?.app ? <Badge tone="ok">Set up</Badge> : <Badge>Not set up</Badge>}
           <span className="flex-1" />
           <button className="icon-btn" title="Refresh" onClick={() => void load()} disabled={loading}>
@@ -123,6 +256,16 @@ export function GitHubSettings() {
               ) : (
                 <span className="gh-dim">Not installed on any repository yet.</span>
               )}
+            </div>
+            <div className="gh-row">
+              <img src="./github-app-logo.png" alt="" width={28} height={28} className="gh-logo" />
+              <span className="gh-dim">
+                Give the bot the Kronos logo: <a href="./github-app-logo.png" download="kronos-github-app.png">download it</a>, then upload it under <b>Display information</b> in the{' '}
+                <a href={status.app.settingsUrl} target="_blank" rel="noreferrer">
+                  app settings <ExternalLink size={11} />
+                </a>{' '}
+                (GitHub only accepts logos uploaded there).
+              </span>
             </div>
             <div className="gh-row">
               <span className="gh-dim">
@@ -158,6 +301,9 @@ export function GitHubSettings() {
               <span>Organization (optional — leave empty for your personal account)</span>
               <input className="input" placeholder="my-org" value={org} onChange={(e) => setOrg(e.target.value)} />
             </label>
+            <label className="gh-check">
+              <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} /> Public — anyone can install it (for publishing an official Kronos bot)
+            </label>
             <div className="gh-actions">
               <button className="btn primary" onClick={() => void createApp()} disabled={busy}>
                 <Github size={14} /> Create the GitHub App
@@ -170,7 +316,7 @@ export function GitHubSettings() {
       <section className="gh-card">
         <header>
           <Github size={16} />
-          <b>Your GitHub account</b>
+          <b>Personal token or GitHub CLI</b>
           {status?.user ? <Badge tone="ok">Connected</Badge> : <Badge>Not connected</Badge>}
         </header>
         {status?.user ? (
@@ -178,7 +324,7 @@ export function GitHubSettings() {
             {status.user.avatarUrl && <img src={status.user.avatarUrl} alt="" width={28} height={28} />}
             <span>
               <b>{status.user.login}</b>
-              {status.user.name ? ` · ${status.user.name}` : ''} <span className="gh-dim">via {status.user.source === 'gh' ? 'the GitHub CLI' : 'a personal access token'}</span>
+              {status.user.name ? ` · ${status.user.name}` : ''} <span className="gh-dim">via {status.user.source === 'gh' ? 'the GitHub CLI' : status.user.source === 'kronos' ? 'Connect GitHub' : 'a personal access token'}</span>
             </span>
             <span className="flex-1" />
             {status.user.source === 'token' && (

@@ -8,8 +8,18 @@ work and replies — with a pull request when it changed code.
 
 ## Connect
 
-Open **Settings → GitHub** in the app (or use `kronos github` in the terminal). There are two ways
-to connect; you can use both.
+### One click: Connect GitHub
+
+**Settings → GitHub → Connect GitHub** (or `kronos github login` in the terminal). Kronos shows a
+short code and opens GitHub; paste it, approve, done — no token to create or copy. Then click
+**Install Kronos on your repositories** and pick the repositories it may work on.
+
+This signs you in through the official Kronos GitHub App with GitHub's device flow (the same
+mechanism as the GitHub CLI): Kronos acts as you, only on repositories where the app is installed,
+and GitHub marks what it does with the Kronos app's badge and logo. No secret is involved — only the
+app's public client id, which ships with Kronos (`github.officialApp`).
+
+The other options below are for people who prefer a token, or want their own bot.
 
 ### Your account (personal token)
 
@@ -21,7 +31,7 @@ Kronos acts as you. Either
   `kronos github login <token>`; the token is checked with GitHub and stored in `~/.kronos/.env`;
 - or log in with the GitHub CLI (`gh auth login`): Kronos uses its token automatically.
 
-### The Kronos GitHub App (bot)
+### Your own GitHub App (bot)
 
 Kronos acts as its own bot account (`<app>[bot]`), only on the repositories you choose, with
 short-lived tokens it renews itself.
@@ -33,6 +43,10 @@ short-lived tokens it renews itself.
 2. **Install on repositories** — pick all or selected repositories.
 
 That is all: every chat can now clone and change those repositories, and the bot is ready.
+
+To give the bot the Kronos logo, download it from the same Settings page (or use
+`assets/brand/github-app-logo.png`) and upload it under **Display information** in the app's
+settings on GitHub — GitHub only accepts logos uploaded there.
 
 The app asks for: Contents, Pull requests, Issues (read & write); Metadata, Checks, Commit
 statuses, Actions (read). It subscribes to issue comments, issues, pull request review comments
@@ -98,3 +112,21 @@ Set `github.apiUrl` (e.g. `https://ghe.example.com/api/v3`) and `github.webUrl`
 - App installation tokens last one hour and only cover the repositories the app is installed on.
 - Only people with write access (owner/member/collaborator by default) can trigger the bot; bots
   cannot trigger it, and each webhook delivery is handled once.
+
+## Maintainers: publishing the official Kronos GitHub App
+
+"Connect GitHub" needs one public app that everyone signs in through. Creating it takes a few
+minutes, once:
+
+1. In Kronos: **Settings → GitHub → Your own GitHub App**, tick **Public**, name it (e.g.
+   `Kronos Agent`) and click **Create the GitHub App** (under an organization if it should belong
+   to one).
+2. On GitHub, open the app's settings:
+   - **General → Display information:** upload `assets/brand/github-app-logo.png`;
+   - **General → Identifying and authorizing users:** tick **Enable Device Flow**;
+   - **Optional features:** opt out of **User-to-server token expiration** (device-flow tokens
+     cannot be refreshed without the client secret, which must never ship);
+   - **Webhook:** turn it off unless you run a public gateway for it.
+3. Put the app's **slug** and **Client ID** (both on the General page) into
+   `github.officialApp` in `packages/core/src/config/schema.ts` and release. Every Kronos with that
+   build gets the one-click **Connect GitHub** button.

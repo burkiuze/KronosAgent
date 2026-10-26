@@ -31,6 +31,8 @@ export interface GitHubAppCredentials {
   clientSecret: string;
   webhookSecret: string;
   pem: string;
+  /** organization that owns the app (personal account when absent) */
+  org?: string;
   createdAt: number;
 }
 
@@ -46,8 +48,10 @@ export interface GitHubRepo {
 
 export interface GitHubStatus {
   connected: boolean;
-  user?: { login: string; name?: string; avatarUrl?: string; source: 'token' | 'gh' };
-  app?: { slug: string; name: string; htmlUrl: string; installUrl: string; installations: { id: number; account: string; repositories: 'all' | 'selected' }[]; webhook: boolean };
+  user?: { login: string; name?: string; avatarUrl?: string; source: 'kronos' | 'token' | 'gh' };
+  /** the official Kronos GitHub App ("Connect GitHub"); absent when this build has none configured */
+  official?: { slug: string; installUrl: string; installations?: number };
+  app?: { slug: string; name: string; htmlUrl: string; installUrl: string; settingsUrl: string; installations: { id: number; account: string; repositories: 'all' | 'selected' }[]; webhook: boolean };
   error?: string;
 }
 
@@ -80,7 +84,7 @@ export class GitHubService {
   private installTokens = new Map<number, { token: string; expiresAt: number }>();
   private repoInstall = new Map<string, { id: number | null; at: number }>();
   private identities = new Map<string, { name: string; email: string }>();
-  private manifestStates = new Map<string, number>();
+  private manifestStates = new Map<string, { at: number; org?: string }>();
 
   constructor(private readonly rt: Kronos) {}
 
@@ -134,10 +138,24 @@ export class GitHubService {
     this.repoInstall.clear();
   }
 
-  /** The user's token: `github.token` (GITHUB_TOKEN), else the GitHub CLI's. */
-  async userToken(): Promise<{ token: string; source: 'token' | 'gh' } | undefined> {
+  private userFile(): string {
+    return join(this.rt.paths.root, 'github-user.json');
+  }
+
+  /** Where the stored token came from, when it was made by "Connect GitHub" (device flow). */
+  private signedIn(token: string): { clientId: string; tokenTail: string; expiresAt?: number } | undefined {
+    try {
+      const j = JSON.parse(readFileSync(this.userFile(), 'utf8')) as { clientId: string; tokenTail: string; expiresAt?: number };
+      return j.tokenTail === token.slice(-8) ? j : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The user's token: `github.token` (GITHUB_TOKEN — also where "Connect GitHub" stores it), else the GitHub CLI's. */
+  async userToken(): Promise<{ token: string; source: 'kronos' | 'token' | 'gh' } | undefined> {
     const t = this.cfg.token?.trim();
-    if (t && !t.startsWith('${')) return { token: t, source: 'token' };
+    if (t && !t.startsWith('${')) return { token: t, source: this.signedIn(t) ? 'kronos' : 'token' };
     this.ghToken ??= runProcess('gh', ['auth', 'token', '--hostname', this.host], { timeoutMs: 5000 })
       .then((r) => (r.exitCode === 0 ? r.stdout.trim() || undefined : undefined))
       .catch(() => undefined);
@@ -261,7 +279,18 @@ export class GitHubService {
       } catch (e) {
         out.error = (e as Error).message;
       }
-      out.app = { slug: app.slug, name: app.name, htmlUrl: app.htmlUrl, installUrl: `${this.cfg.webUrl.replace(/\/+$/, '')}/apps/${app.slug}/installations/new`, installations, webhook };
+      const web = this.cfg.webUrl.replace(/\/+$/, '');
+      const settingsUrl = `${web}/${app.org ? `organizations/${app.org}/` : ''}settings/apps/${app.slug}`;
+      out.app = { slug: app.slug, name: app.name, htmlUrl: app.htmlUrl, installUrl: this.installUrl(app.slug), settingsUrl, installations, webhook };
+    }
+    const official = this.official();
+    if (official?.slug) {
+      out.official = { slug: official.slug, installUrl: this.installUrl(official.slug) };
+      if (out.user?.source === 'kronos') {
+        const user = await this.userToken();
+        const inst = await this.request<{ total_count: number }>('GET', '/user/installations', undefined, { token: user?.token }).catch(() => undefined);
+        if (inst) out.official.installations = inst.total_count;
+      }
     }
     out.connected = Boolean(out.user || out.app?.installations.length);
     return out;
@@ -284,7 +313,14 @@ export class GitHubService {
       }
     }
     const user = await this.userToken();
-    if (user) {
+    if (user?.source === 'kronos') {
+      // signed in through the Kronos app: the repositories it is installed on that the user can access
+      const inst = await this.request<{ installations: { id: number }[] }>('GET', '/user/installations', undefined, { token: user.token }).catch(() => ({ installations: [] }));
+      for (const i of inst.installations) {
+        const r = await this.request<{ repositories: ApiRepo[] }>('GET', `/user/installations/${i.id}/repositories?per_page=100`, undefined, { token: user.token }).catch(() => ({ repositories: [] }));
+        for (const repo of r.repositories) add(repo, 'app');
+      }
+    } else if (user) {
       const list = await this.request<ApiRepo[]>('GET', '/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member', undefined, { token: user.token }).catch(() => []);
       for (const repo of list) add(repo, 'user');
     }
@@ -395,6 +431,78 @@ export class GitHubService {
     return { repo, branch: b, output: r.output };
   }
 
+  // ------------------------------------------------------------------------- "Connect GitHub"
+
+  private devices = new Map<string, { deviceCode: string; clientId: string; interval: number; expiresAt: number }>();
+
+  /** The official app this build signs users in through, if any. */
+  official(): { slug: string; clientId: string } | undefined {
+    const o = this.cfg.officialApp;
+    return o?.clientId?.trim() ? { slug: o.slug.trim(), clientId: o.clientId.trim() } : undefined;
+  }
+
+  installUrl(slug: string): string {
+    return `${this.cfg.webUrl.replace(/\/+$/, '')}/apps/${slug}/installations/new`;
+  }
+
+  /**
+   * Starts GitHub's device flow for the official Kronos app: the user opens `verificationUri`,
+   * enters `userCode` and approves; `pollDeviceFlow` then receives a token acting as the user through
+   * the app (GitHub shows the Kronos app's logo on what it does). Needs no client secret.
+   */
+  async startDeviceFlow(): Promise<{ handle: string; userCode: string; verificationUri: string; interval: number; expiresIn: number }> {
+    const app = this.official();
+    if (!app) throw new GitHubError('This Kronos build has no official GitHub App configured (github.officialApp.clientId). Connect with a token or create your own app.', 400);
+    const res = await fetch(`${this.cfg.webUrl.replace(/\/+$/, '')}/login/device/code`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'KronosAgent' },
+      body: JSON.stringify({ client_id: app.clientId }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const j = (await res.json().catch(() => ({}))) as { device_code?: string; user_code?: string; verification_uri?: string; interval?: number; expires_in?: number; error_description?: string; error?: string };
+    if (!res.ok || !j.device_code) throw new GitHubError(`GitHub refused to start sign-in: ${j.error_description ?? j.error ?? res.status} (is Device Flow enabled for the app?)`, res.status || 400);
+    const handle = randomBytes(12).toString('hex');
+    const expiresIn = j.expires_in ?? 900;
+    this.devices.set(handle, { deviceCode: j.device_code, clientId: app.clientId, interval: j.interval ?? 5, expiresAt: Date.now() + expiresIn * 1000 });
+    return { handle, userCode: String(j.user_code), verificationUri: String(j.verification_uri ?? 'https://github.com/login/device'), interval: j.interval ?? 5, expiresIn };
+  }
+
+  /** One poll of a started device flow. On success the token is stored and returned as done. */
+  async pollDeviceFlow(handle: string): Promise<{ status: 'pending' | 'slow_down' | 'done' | 'expired' | 'denied'; login?: string; interval?: number; token?: string }> {
+    const d = this.devices.get(handle);
+    if (!d || Date.now() > d.expiresAt) {
+      this.devices.delete(handle);
+      return { status: 'expired' };
+    }
+    const res = await fetch(`${this.cfg.webUrl.replace(/\/+$/, '')}/login/oauth/access_token`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'KronosAgent' },
+      body: JSON.stringify({ client_id: d.clientId, device_code: d.deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const j = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string; interval?: number };
+    if (j.access_token) {
+      this.devices.delete(handle);
+      const me = await this.request<{ login: string }>('GET', '/user', undefined, { token: j.access_token }).catch(() => ({ login: '' }));
+      mkdirSync(this.rt.paths.root, { recursive: true });
+      writeFileSync(this.userFile(), JSON.stringify({ clientId: d.clientId, tokenTail: j.access_token.slice(-8), login: me.login, expiresAt: j.expires_in ? Date.now() + j.expires_in * 1000 : undefined }), { mode: 0o600 });
+      return { status: 'done', login: me.login, token: j.access_token };
+    }
+    if (j.error === 'slow_down') {
+      d.interval = j.interval ?? d.interval + 5;
+      return { status: 'slow_down', interval: d.interval };
+    }
+    if (j.error === 'authorization_pending') return { status: 'pending', interval: d.interval };
+    this.devices.delete(handle);
+    return { status: j.error === 'access_denied' ? 'denied' : 'expired' };
+  }
+
+  /** Forget the signed-in account's metadata (the token itself lives in .env). */
+  signOut(): void {
+    rmSync(this.userFile(), { force: true });
+    this.resetCache();
+  }
+
   // ------------------------------------------------------------------------------- app creation
 
   /**
@@ -402,12 +510,12 @@ export class GitHubService {
    * posts it to `action`; GitHub redirects back to `/hooks/github/app-created` with a code that
    * `completeManifest` exchanges for the app's credentials. `state` ties the redirect to this request.
    */
-  createManifest(opts: { baseUrl: string; publicUrl?: string; org?: string; name?: string }): { action: string; manifest: Record<string, unknown>; state: string } {
+  createManifest(opts: { baseUrl: string; publicUrl?: string; org?: string; name?: string; public?: boolean }): { action: string; manifest: Record<string, unknown>; state: string } {
     const base = opts.baseUrl.replace(/\/+$/, '');
     const pub = (opts.publicUrl || this.rt.config.gateway.publicUrl || '').replace(/\/+$/, '');
     const state = randomBytes(16).toString('hex');
-    this.manifestStates.set(state, Date.now());
-    for (const [s, at] of this.manifestStates) if (Date.now() - at > 60 * 60_000) this.manifestStates.delete(s);
+    this.manifestStates.set(state, { at: Date.now(), org: opts.org });
+    for (const [s, v] of this.manifestStates) if (Date.now() - v.at > 60 * 60_000) this.manifestStates.delete(s);
     const manifest = {
       name: opts.name || `kronos-${randomBytes(3).toString('hex')}`,
       url: 'https://github.com/burkiuze/KronosAgent',
@@ -417,7 +525,7 @@ export class GitHubService {
       setup_url: `${base}/hooks/github/installed`,
       callback_urls: [`${base}/hooks/github/installed`],
       setup_on_update: true,
-      public: false,
+      public: Boolean(opts.public),
       default_permissions: { contents: 'write', pull_requests: 'write', issues: 'write', metadata: 'read', checks: 'read', statuses: 'read', actions: 'read' },
       default_events: ['issue_comment', 'issues', 'pull_request_review_comment', 'pull_request_review'],
     };
@@ -427,7 +535,8 @@ export class GitHubService {
   }
 
   async completeManifest(code: string, state: string): Promise<GitHubAppCredentials> {
-    if (!this.manifestStates.delete(state)) throw new GitHubError('Unknown or expired setup request — start "Create the GitHub App" again.', 400);
+    const pending = this.manifestStates.get(state);
+    if (!pending || !this.manifestStates.delete(state)) throw new GitHubError('Unknown or expired setup request — start "Create the GitHub App" again.', 400);
     const res = await fetch(`${this.cfg.apiUrl.replace(/\/+$/, '')}/app-manifests/${encodeURIComponent(code)}/conversions`, {
       method: 'POST',
       headers: { accept: 'application/vnd.github+json', 'user-agent': 'KronosAgent' },
@@ -445,6 +554,7 @@ export class GitHubService {
       clientSecret: String(j.client_secret),
       webhookSecret: String(j.webhook_secret ?? ''),
       pem: String(j.pem),
+      org: pending.org,
       createdAt: Date.now(),
     };
     this.saveApp(creds);

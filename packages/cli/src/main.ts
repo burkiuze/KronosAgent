@@ -51,7 +51,7 @@ ${c.bold('Manage')}
   kronos eval <suite.yaml> [--repeats N] [--model a,b] [--effort low,high] [--out report.json] [--trajectories dir]
   kronos cron [list|add|remove|run|pause|resume]            kronos memory [show|add|search|clear]
   kronos mcp [list|add|remove|serve]                        kronos pairing [list|approve <code>]
-  kronos github [status|repos [query]|clone <owner/repo>|login <token>|logout]
+  kronos github [status|repos [query]|clone <owner/repo>|login [token]|logout]
   kronos import <hermes|openclaw|claude|codex|cursor>       kronos insights [--days N]
   kronos doctor · kronos version · kronos update [--check]
 
@@ -392,6 +392,25 @@ async function cmdGitHub(rt: Kronos, pos: string[]): Promise<void> {
     }
     case 'login': {
       let token = arg;
+      if (!token && gh.official()) {
+        // one click: sign in through the official Kronos GitHub App
+        const f = await gh.startDeviceFlow();
+        console.log(`\n  Open ${c.cyan(f.verificationUri)} and enter the code ${c.bold(f.userCode)}\n`);
+        let interval = f.interval;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, interval * 1000));
+          const r = await gh.pollDeviceFlow(f.handle);
+          if (r.status === 'done' && r.token) {
+            updateDotenv(join(rt.home, '.env'), { GITHUB_TOKEN: r.token });
+            console.log(`${c.green(sym.ok)} Connected to GitHub as ${r.login}`);
+            const o = gh.official();
+            if (o?.slug) console.log(c.gray(`  Choose the repositories Kronos may work on: ${gh.installUrl(o.slug)}`));
+            return;
+          }
+          if (r.status === 'expired' || r.status === 'denied') throw new Error(r.status === 'denied' ? 'GitHub sign-in was cancelled' : 'the code expired — run kronos github login again');
+          if (r.interval) interval = r.interval;
+        }
+      }
       if (!token) {
         const { createInterface } = await import('node:readline/promises');
         const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -405,6 +424,7 @@ async function cmdGitHub(rt: Kronos, pos: string[]): Promise<void> {
     }
     case 'logout':
       updateDotenv(join(rt.home, '.env'), { GITHUB_TOKEN: null });
+      gh.signOut();
       console.log(`${c.green(sym.ok)} GitHub token removed`);
       return;
     default: {

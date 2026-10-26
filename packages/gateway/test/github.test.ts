@@ -27,6 +27,7 @@ let apiUrl: string;
 let rt: Kronos;
 let gw: Gateway;
 const calls: { method: string; path: string; auth: string; body: Record<string, unknown> }[] = [];
+let deviceTries = 0;
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 
@@ -59,6 +60,12 @@ function fakeGitHub(): Server {
       if (m(/^PATCH \/repos\/acme\/widgets\/issues\/comments\/1001$/)) return send(200, { id: 1001 });
       if (m(/^GET \/repos\/acme\/widgets\/issues\/\d+\/comments$/)) return send(200, []);
       if (m(/^POST \/repos\/acme\/widgets\/pulls$/)) return send(201, { number: 12, html_url: 'https://github.com/acme/widgets/pull/12' });
+      // "Connect GitHub" (device flow through the official app)
+      if (m(/^POST \/login\/device\/code$/)) return body.client_id === 'Iv1.official' ? send(200, { device_code: 'dc-1', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', interval: 1, expires_in: 900 }) : send(400, { error: 'unauthorized_client' });
+      if (m(/^POST \/login\/oauth\/access_token$/)) return send(200, (deviceTries += 1) === 1 ? { error: 'authorization_pending' } : { access_token: 'ghu_signedin_ada_0001', token_type: 'bearer' });
+      if (m(/^GET \/user$/) && req.headers.authorization === 'Bearer ghu_signedin_ada_0001') return send(200, { login: 'ada', id: 1 });
+      if (m(/^GET \/user\/installations$/)) return send(200, { total_count: 1, installations: [{ id: 9 }] });
+      if (m(/^GET \/user\/installations\/9\/repositories$/)) return send(200, { repositories: [{ full_name: 'ada/site', private: false, description: 'My site', default_branch: 'main', updated_at: '2026-10-02T00:00:00Z', html_url: 'https://github.com/ada/site' }] });
       send(404, { message: `fake: no route ${req.method} ${path}` });
     });
   });
@@ -242,5 +249,37 @@ describe('GitHub', () => {
     expect(r.path).toBe(join(rt.paths.root, 'repos', 'acme', 'widgets'));
     expect(existsSync(join(r.path, 'README.md'))).toBe(true);
     expect(rt.sessions.get(r.session.id)?.cwd).toBe(r.path);
+  });
+
+  it('connects in one click through the official Kronos app (device flow)', async () => {
+    const official = await Kronos.create({
+      home: join(root, 'home-official'),
+      cwd: root,
+      connectMcp: false,
+      logLevel: 'silent',
+      overrides: { model: { default: 'kronos:demo' }, skills: { claudeCompat: false }, github: { apiUrl, webUrl: apiUrl, officialApp: { slug: 'kronos-agent', clientId: 'Iv1.official' } } } as never,
+    });
+    try {
+      const gh = official.github;
+      expect(gh.installUrl('kronos-agent')).toBe(`${apiUrl}/apps/kronos-agent/installations/new`);
+      const flow = await gh.startDeviceFlow();
+      expect(flow).toMatchObject({ userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device' });
+      expect(await gh.pollDeviceFlow(flow.handle)).toMatchObject({ status: 'pending' });
+      const done = await gh.pollDeviceFlow(flow.handle);
+      expect(done).toMatchObject({ status: 'done', login: 'ada', token: 'ghu_signedin_ada_0001' });
+      expect(await gh.pollDeviceFlow(flow.handle)).toMatchObject({ status: 'expired' }); // a handle works once
+      // the gateway keeps it in .env as GITHUB_TOKEN; it is then recognised as signed in through Kronos
+      process.env.GITHUB_TOKEN = done.token;
+      official.reload();
+      const status = await gh.status();
+      expect(status.user).toMatchObject({ login: 'ada', source: 'kronos' });
+      expect(status.official).toMatchObject({ slug: 'kronos-agent', installations: 1 });
+      expect((await gh.repos()).map((r) => r.fullName)).toEqual(['ada/site']);
+      gh.signOut();
+      expect((await gh.userToken())?.source).toBe('token');
+    } finally {
+      delete process.env.GITHUB_TOKEN;
+      await official.close();
+    }
   });
 });

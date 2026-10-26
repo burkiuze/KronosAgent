@@ -208,6 +208,11 @@ export interface KronosConfig {
     reposDir: string;
     /** authenticate `git` in the agent's shell for GitHub remotes */
     shellAuth: boolean;
+    /**
+     * the official, public Kronos GitHub App: "Connect GitHub" signs users in through it (device flow —
+     * only its public client id is needed) and links to installing it on their repositories
+     */
+    officialApp: { slug: string; clientId: string };
     /** answering @mentions on issues and pull requests (needs the Kronos GitHub App and a public URL) */
     bot: {
       enabled: boolean;
@@ -339,6 +344,7 @@ export function defaultConfig(): KronosConfig {
       token: '${GITHUB_TOKEN}',
       reposDir: '',
       shellAuth: true,
+      officialApp: { slug: '', clientId: '' },
       bot: { enabled: true, trigger: '@kronos', allowed: ['OWNER', 'MEMBER', 'COLLABORATOR'], mode: 'yolo', model: null, maxMinutes: 30 },
     },
   };

@@ -187,15 +187,29 @@ export function buildApi(gw: Gateway): Router {
   r.delete('/api/github/token', () => {
     updateDotenv(join(rt().home, '.env'), { GITHUB_TOKEN: null });
     rt().reload();
-    rt().github.resetCache();
+    rt().github.signOut();
     return { ok: true };
+  });
+  /** "Connect GitHub": sign in through the official Kronos GitHub App (device flow). */
+  r.post('/api/github/connect/start', async () => rt().github.startDeviceFlow().catch((e: Error & { status?: number }) => {
+    throw new HttpError(e.status && e.status < 500 ? e.status : 400, e.message);
+  }));
+  r.post('/api/github/connect/poll', async (req) => {
+    const { handle } = await req.body<{ handle: string }>();
+    const r = await rt().github.pollDeviceFlow(handle);
+    if (r.status === 'done' && r.token) {
+      updateDotenv(join(rt().home, '.env'), { GITHUB_TOKEN: r.token });
+      rt().reload();
+      rt().github.resetCache();
+    }
+    return { status: r.status, login: r.login, interval: r.interval };
   });
   /** The manifest for creating the Kronos GitHub App; the UI posts it to GitHub. */
   r.post('/api/github/app/manifest', async (req) => {
-    const b = await req.body<{ baseUrl: string; publicUrl?: string; org?: string; name?: string }>();
+    const b = await req.body<{ baseUrl: string; publicUrl?: string; org?: string; name?: string; public?: boolean }>();
     if (!/^https?:\/\//.test(b.baseUrl ?? '')) throw new HttpError(400, 'baseUrl is required');
     if (b.publicUrl !== undefined && b.publicUrl !== (rt().config.gateway.publicUrl ?? '')) rt().updateConfig({ gateway: { publicUrl: b.publicUrl.trim() } });
-    return rt().github.createManifest({ baseUrl: b.baseUrl, publicUrl: b.publicUrl, org: b.org?.trim() || undefined, name: b.name?.trim() || undefined });
+    return rt().github.createManifest({ baseUrl: b.baseUrl, publicUrl: b.publicUrl, org: b.org?.trim() || undefined, name: b.name?.trim() || undefined, public: Boolean(b.public) });
   });
   r.delete('/api/github/app', () => {
     rt().github.removeApp();

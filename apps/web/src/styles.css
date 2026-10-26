@@ -4383,3 +4383,69 @@ button.sb-item:hover,
   align-items: flex-start;
   gap: 10px;
 }
+
+.gh-connect {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.gh-connect-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.gh-connect-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.92em;
+}
+
+.gh-logo {
+  border-radius: 22%;
+  flex: none;
+}
+
+.gh-big {
+  padding: 9px 18px;
+  font-size: 1em;
+}
+
+.gh-device {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.gh-code {
+  font-size: 1.6em;
+  letter-spacing: 0.18em;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--hover);
+  font-weight: 600;
+}
+
+.gh-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+}
+
+.gh-check {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 8px;
+  font-size: 0.85em;
+  color: var(--dim);
+}
+
+.gh-check input {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
