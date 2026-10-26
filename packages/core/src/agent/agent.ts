@@ -907,7 +907,7 @@ export class Agent {
         }
       }
       const risk = resolveRisk(def, input);
-      const check = this.policy.check({ name: call.name, toolset: def.toolset, risk, input, cwd: this.session.cwd }, this.mode);
+      const check = this.policy.check({ name: call.name, toolset: def.toolset, risk, input, cwd: this.session.cwd, sandboxed: this.rt.sandboxActive() }, this.mode);
       if (check.action === 'deny') {
         fail(`Permission denied: ${check.reason}`);
         continue;

@@ -556,6 +556,12 @@ export class Kronos {
   // Diagnostics
   // ---------------------------------------------------------------------------
 
+  /** Local commands run inside a working OS sandbox (see terminal.sandbox). */
+  sandboxActive(): boolean {
+    const sb = this.config.terminal.sandbox;
+    return this.backend.name === 'local' && !!sb && sb.mode !== 'off' && 'engine' in detectSandbox();
+  }
+
   async doctor(): Promise<{ check: string; ok: boolean; detail: string }[]> {
     const { which } = await import('./util/process.js');
     const out: { check: string; ok: boolean; detail: string }[] = [];

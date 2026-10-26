@@ -2,6 +2,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import type { PermissionMode, ToolRisk } from '../types.js';
 import type { KronosConfig } from '../config/schema.js';
 import { detectDangerous, isReadOnlyCommand } from './dangerous.js';
+import { commandsOf } from './shellparse.js';
 import { globToRegExp } from '../util/glob.js';
 import { expandHome } from '../config/paths.js';
 
@@ -19,6 +20,8 @@ export interface ToolCallDescriptor {
   risk: ToolRisk;
   input: Record<string, unknown>;
   cwd: string;
+  /** commands run inside the OS sandbox (terminal.sandbox), which contains their effects */
+  sandboxed?: boolean;
 }
 
 /** Extract the argument a rule pattern is matched against. */
@@ -42,19 +45,54 @@ function parseRule(rule: string): { tool: RegExp; arg?: RegExp } {
   return { tool, arg: re };
 }
 
-export function ruleMatches(rule: string, name: string, arg: string): boolean {
+function argMatches(r: { arg?: RegExp }, arg: string): boolean {
+  return !r.arg || r.arg.test(arg);
+}
+
+/**
+ * Does a rule cover this call? For shell commands with an argument pattern the line is parsed and
+ * every command in it must match on its own — `shell(git status*)` covers `git status -s` but not
+ * `git status && rm -rf src`. Lines that cannot be judged (substitutions, subshells, sudo, writes
+ * through redirections outside the project) are never covered by an allow pattern.
+ * `mode: 'deny'` matches when any single command (or the whole line) matches.
+ */
+export function ruleMatches(rule: string, name: string, arg: string, mode: 'allow' | 'deny' = 'allow'): boolean {
   const r = parseRule(rule);
   if (!r.tool.test(name)) return false;
   if (!r.arg) return true;
-  return r.arg.test(arg);
+  if (name !== 'shell' && name !== 'process') return r.arg.test(arg);
+  const { commands, opaque, privileged, parsed } = commandsOf(arg);
+  const lines = commands.map((c) => c.join(' '));
+  if (mode === 'deny') return r.arg.test(arg.trim()) || lines.some((l) => argMatches(r, l));
+  if (opaque || privileged || !lines.length) return false;
+  const safeRedirects = parsed.redirects.every((d) => /^\d*[<]/.test(d.op) || /&$/.test(d.op) || d.target === '/dev/null' || (!!d.target && !d.target.startsWith('/') && !d.target.startsWith('~') && !d.target.split('/').includes('..')));
+  return safeRedirects && lines.every((l) => argMatches(r, l));
 }
 
-function suggestRule(name: string, arg: string): string {
-  if (name === 'shell' && arg) {
-    const words = arg.trim().split(/\s+/);
-    return `shell(${words.slice(0, Math.min(2, words.length)).join(' ')}*)`;
+/** Prefixes too broad to approve once for all: interpreters, shells and multi-purpose tools (as in Codex). */
+const BROAD_PREFIXES = new Set([
+  'bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'env', 'sudo', 'doas', 'xargs', 'eval', 'exec', 'git', 'rm', 'python', 'python3', 'py', 'pypy', 'pypy3',
+  'node', 'nodejs', 'bun', 'deno', 'ruby', 'perl', 'php', 'lua', 'julia', 'Rscript', 'osascript', 'powershell', 'pwsh', 'cmd', 'npx', 'pnpx', 'bunx',
+  'npm run', 'pnpm run', 'yarn run', 'bun run', 'python -c', 'python3 -c', 'node -e', 'perl -e', 'ruby -e', 'php -r', 'deno eval', 'uv run', 'poetry run', 'cargo run', 'go run',
+  'docker run', 'docker exec', 'kubectl exec', 'ssh', 'curl', 'wget',
+]);
+
+/** The rule offered with "always allow": the first command's two leading words, never a too-broad prefix. */
+export function suggestRule(name: string, arg: string): string {
+  if (name !== 'shell' || !arg) return name;
+  const { commands, opaque } = commandsOf(arg);
+  const first = commands[0];
+  if (!first?.length) return `shell(${arg.trim()})`;
+  const prog = first[0]!.replace(/^.*\//, '');
+  const two = [prog, ...first.slice(1, 2)].join(' ');
+  // a multi-command or unparseable line, or a broad program: only this exact command line
+  if (opaque || commands.length > 1) return `shell(${arg.trim()})`;
+  if (BROAD_PREFIXES.has(two) || (first.length === 1 && BROAD_PREFIXES.has(prog))) return `shell(${first.join(' ')})`;
+  if (BROAD_PREFIXES.has(prog)) {
+    // `git commit …` → git commit*, but `python script.py` → exactly that
+    return prog === 'git' && first[1] && !first[1].startsWith('-') ? `shell(git ${first[1]}*)` : `shell(${first.join(' ')})`;
   }
-  return name;
+  return `shell(${two}*)`;
 }
 
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'fs', 'notebook_edit']);
@@ -100,7 +138,7 @@ export class PermissionPolicy {
     const suggestedRule = suggestRule(call.name, arg);
 
     for (const rule of this.safety.deny) {
-      if (ruleMatches(rule, call.name, arg)) return { action: 'deny', reason: `blocked by deny rule "${rule}"` };
+      if (ruleMatches(rule, call.name, arg, 'deny')) return { action: 'deny', reason: `blocked by deny rule "${rule}"` };
     }
 
     const dangerous = call.name === 'shell' || call.name === 'execute_code' ? detectDangerous(String(call.input.command ?? call.input.code ?? '')) : undefined;
@@ -140,6 +178,9 @@ export class PermissionPolicy {
       case 'execute':
         if (mode === 'yolo') return { action: 'allow', reason: 'yolo mode' };
         if (call.name === 'shell' && isReadOnlyCommand(String(call.input.command ?? ''))) return { action: 'allow', reason: 'read-only command' };
+        // like Codex's on-request policy: inside the sandbox a command cannot change anything
+        // outside the project, so auto-edit lets it run (dangerous ones were handled above)
+        if (mode === 'auto-edit' && call.sandboxed && (call.name === 'shell' || call.name === 'execute_code')) return { action: 'allow', reason: 'runs in the sandbox' };
         return { action: 'ask', reason: 'run a command', suggestedRule };
       case 'external':
       default:
