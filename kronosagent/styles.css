@@ -475,8 +475,9 @@ code {
 .ht-line {
   display: block;
   overflow: hidden;
-  padding-bottom: 0.06em;
-  margin-bottom: -0.06em;
+  /* room for descenders (g, y): the mask only hides the rise animation */
+  padding-bottom: 0.22em;
+  margin-bottom: -0.22em;
 }
 
 .ht-line > span {
