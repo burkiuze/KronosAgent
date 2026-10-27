@@ -47,7 +47,7 @@
       ]
     },
     {
-      "source": "/navio/(.*)\\.(webp|svg)",
+      "source": "/navio/(.*)\\.(webp|png)",
       "headers": [
         {
           "key": "Cache-Control",
