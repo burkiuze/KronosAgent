@@ -26,8 +26,16 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run build
       - name: Package and publish to the GitHub release
-        # without a Developer ID the macOS app is signed ad hoc, which Apple Silicon needs to run it at all
-        run: npm run release -w @kronos/desktop -- ${{ secrets.CSC_LINK == '' && '-c.mac.identity=-' || '' }}
+        # Signing secrets are optional. An empty CSC_LINK reads as a file path, so it is dropped; without
+        # a Developer ID the macOS app is signed ad hoc, which Apple Silicon needs to run it at all.
+        run: |
+          extra=""
+          if [ -z "$CSC_LINK" ]; then
+            unset CSC_LINK CSC_KEY_PASSWORD
+            extra="-c.mac.identity=-"
+          fi
+          [ -n "$APPLE_ID" ] || unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          npm run release -w @kronos/desktop -- $extra
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

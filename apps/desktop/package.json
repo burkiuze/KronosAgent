@@ -5,7 +5,10 @@
   "private": true,
   "description": "KRONOS Desktop — native shell for Kronos Agent.",
   "license": "Apache-2.0",
-  "author": "Kronos Agent contributors",
+  "author": {
+    "name": "Kronos Agent contributors",
+    "email": "info@heynavio.com"
+  },
   "main": "dist/main.cjs",
   "scripts": {
     "build": "node build.mjs",
@@ -109,5 +112,6 @@
     "dmg": {
       "artifactName": "Kronos-mac.${ext}"
     }
-  }
+  },
+  "homepage": "https://heynavio.com/kronosagent"
 }
