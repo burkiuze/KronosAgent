@@ -73,7 +73,9 @@
         "deb"
       ],
       "category": "Development",
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "artifactName": "Kronos-${version}-${arch}.${ext}",
+      "desktopName": "kronos.desktop"
     },
     "publish": [
       {
@@ -111,6 +113,9 @@
     },
     "dmg": {
       "artifactName": "Kronos-mac.${ext}"
+    },
+    "deb": {
+      "packageName": "kronos"
     }
   },
   "homepage": "https://heynavio.com/kronosagent"
