@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Kronos Agent</title>
+    <meta name="description" content="Kronos Agent — a private AI agent. Bring your own API keys or use Kronos models with a membership." />
+    <meta name="theme-color" content="#0b0e1f" />
+    <link rel="icon" type="image/x-icon" href="/assets/img/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://clerk.heynavio.com" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/assets/fonts/big-shoulders-display.woff2" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/assets/fonts/lexend-300.woff2" crossorigin />
+    <link rel="stylesheet" href="/kronosagent/app/app.css?v=2" />
+    <script src="/kronosagent/app/app.js?v=2" defer></script>
+  </head>
+  <body>
+    <div class="boot" id="boot" aria-hidden="true"><span class="boot-mark">Kronos</span></div>
+
+    <!-- ───────────── AUTH ───────────── -->
+    <section class="auth" id="auth" hidden>
+      <div class="auth-art" aria-hidden="true">
+        <img src="/assets/img/hero-wide-960.webp" srcset="/assets/img/hero-wide-960.webp 960w, /assets/img/hero-wide.webp 1672w" sizes="(max-width: 900px) 100vw, 55vw" width="1672" height="941" alt="" />
+        <div class="auth-art-copy">
+          <p class="label">Kronos Agent</p>
+          <h1 class="auth-title">The Agent That<br />Grows With You</h1>
+          <p class="auth-sub">Private by design. Your keys stay in your browser, your chats stay on your device.</p>
+        </div>
+      </div>
+
+      <div class="auth-panel">
+        <a class="wordmark" href="/kronosagent">Kronos Agent</a>
+        <div class="auth-tabs" role="tablist">
+          <button class="auth-tab is-active" role="tab" aria-selected="true" data-auth="sign-in">Sign in</button>
+          <button class="auth-tab" role="tab" aria-selected="false" data-auth="sign-up">Create account</button>
+        </div>
+        <div class="clerk-mount" id="clerk-mount">
+          <p class="muted" id="clerk-status">Loading secure sign-in…</p>
+        </div>
+        <div class="auth-or"><span>or</span></div>
+        <button class="btn btn-ghost btn-block" id="guest-btn">Continue without an account</button>
+        <p class="auth-note">Without an account you can chat with your own API keys. Kronos models need a membership.</p>
+        <p class="auth-foot">
+          <a href="/kronosagent">About Kronos</a>
+          <span>&middot;</span>
+          <a href="/">Navio</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- ───────────── APP ───────────── -->
+    <div class="app" id="app" hidden>
+      <aside class="side" id="side">
+        <div class="side-top">
+          <a class="wordmark" href="/kronosagent">Kronos Agent</a>
+          <button class="icon-btn side-close" id="side-close" aria-label="Close sidebar">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <button class="btn btn-dark btn-block new-chat" id="new-chat">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          New chat
+        </button>
+        <nav class="chats" id="chats" aria-label="Chats"></nav>
+        <div class="side-foot">
+          <button class="me" id="me-btn">
+            <span class="me-avatar" id="me-avatar">K</span>
+            <span class="me-text">
+              <span class="me-name" id="me-name">Guest</span>
+              <span class="me-plan" id="me-plan">No membership</span>
+            </span>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+          </button>
+        </div>
+      </aside>
+      <div class="scrim" id="scrim" hidden></div>
+
+      <main class="main">
+        <header class="topbar">
+          <button class="icon-btn side-open" id="side-open" aria-label="Open sidebar">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          </button>
+          <div class="picker">
+            <button class="picker-btn" id="picker-btn" aria-haspopup="listbox" aria-expanded="false">
+              <span id="picker-label">Choose a model</span>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="picker-menu" id="picker-menu" role="listbox" hidden></div>
+          </div>
+          <span class="usage-pill" id="usage-pill" hidden></span>
+          <button class="icon-btn top-settings" id="top-settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+          </button>
+        </header>
+
+        <section class="thread" id="thread" aria-live="polite">
+          <div class="empty" id="empty">
+            <h2 class="empty-title">What should Kronos do?</h2>
+            <p class="muted" id="empty-hint">Pick a model and start typing.</p>
+          </div>
+        </section>
+
+        <form class="composer" id="composer">
+          <div class="composer-box">
+            <textarea id="input" rows="1" placeholder="Message Kronos…" autocomplete="off" spellcheck="true"></textarea>
+            <button class="send" id="send" type="submit" aria-label="Send">
+              <svg class="i-send" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+              <svg class="i-stop" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+          </div>
+          <p class="composer-note">Chats are stored only on this device.</p>
+        </form>
+      </main>
+    </div>
+
+    <!-- ───────────── SETTINGS ───────────── -->
+    <dialog class="settings" id="settings">
+      <div class="settings-head">
+        <h2>Settings</h2>
+        <button class="icon-btn" data-close aria-label="Close">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <nav class="tabs" role="tablist">
+          <button class="tab is-active" role="tab" data-tab="membership">Membership</button>
+          <button class="tab" role="tab" data-tab="keys">API keys</button>
+          <button class="tab" role="tab" data-tab="account">Account</button>
+          <button class="tab" role="tab" data-tab="data">Data</button>
+        </nav>
+
+        <div class="pane" data-pane="membership">
+          <div class="plan-now" id="plan-now"></div>
+          <form class="promo" id="promo">
+            <label for="promo-input" class="label">Promo code</label>
+            <div class="promo-row">
+              <input id="promo-input" name="code" placeholder="KRONOS-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" maxlength="40" />
+              <button class="btn btn-light" type="submit">Redeem</button>
+            </div>
+            <p class="form-msg" id="promo-msg" role="status"></p>
+          </form>
+          <div class="plans" id="plans"></div>
+          <p class="fine">Pro is the baseline. Max gives 2&times; Pro usage, Max 5 gives 5&times;. Daily allowance resets at 00:00 UTC.</p>
+        </div>
+
+        <div class="pane" data-pane="keys" hidden>
+          <p class="fine">Keys are saved only in this browser and sent straight to the provider. They never reach Navio servers.</p>
+          <div class="keys" id="keys"></div>
+        </div>
+
+        <div class="pane" data-pane="account" hidden>
+          <div id="account"></div>
+        </div>
+
+        <div class="pane" data-pane="data" hidden>
+          <p class="fine">Your chats live in this browser's storage. Nothing is kept on our servers.</p>
+          <div class="row-btns">
+            <button class="btn btn-dark" id="export-chats">Export chats</button>
+            <button class="btn btn-danger" id="clear-chats">Delete all chats</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" hidden></div>
+  </body>
+</html>

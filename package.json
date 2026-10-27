@@ -1,0 +1,6 @@
+{
+  "name": "kronos-agent",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" }
+}

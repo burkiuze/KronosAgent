@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Babo · Navio admin</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/kronosagent/app/app.css?v=2" />
+    <link rel="stylesheet" href="/babo/babo.css?v=1" />
+    <script src="/babo/babo.js?v=1" defer></script>
+  </head>
+  <body class="babo">
+    <section class="gate" id="gate" hidden>
+      <form class="gate-card" id="login">
+        <p class="label">Navio admin</p>
+        <h1 class="gate-title">Babo</h1>
+        <input type="password" name="password" placeholder="Password" autocomplete="current-password" required autofocus />
+        <button class="btn btn-blue btn-block" type="submit">Enter</button>
+        <p class="form-msg err" id="login-msg" role="alert"></p>
+      </form>
+    </section>
+
+    <main class="admin" id="admin" hidden>
+      <header class="admin-top">
+        <div><p class="label">Navio admin</p><h1 class="gate-title">Babo</h1></div>
+        <button class="btn btn-ghost" id="logout">Sign out</button>
+      </header>
+
+      <section class="stats" id="stats"></section>
+
+      <section class="card">
+        <h2 class="card-title">Create promo code</h2>
+        <form class="create" id="create">
+          <label><span class="label">Membership</span>
+            <select name="tier" required>
+              <option value="lite">Lite</option>
+              <option value="pro" selected>Pro</option>
+              <option value="max">Max (2× Pro)</option>
+              <option value="max5">Max 5 (5× Pro)</option>
+            </select>
+          </label>
+          <label><span class="label">Duration</span>
+            <select name="preset">
+              <option value="7">7 days</option>
+              <option value="30" selected>30 days</option>
+              <option value="90">90 days</option>
+              <option value="180">180 days</option>
+              <option value="365">1 year</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </label>
+          <label class="custom-days" hidden><span class="label">Days</span>
+            <input type="number" name="days" min="1" max="3650" value="30" />
+          </label>
+          <label><span class="label">Max uses</span>
+            <input type="number" name="maxUses" min="1" placeholder="Unlimited" />
+          </label>
+          <label><span class="label">Code valid until</span>
+            <input type="date" name="validUntil" />
+          </label>
+          <label><span class="label">Code (optional)</span>
+            <input name="code" placeholder="Auto-generate" maxlength="40" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="wide"><span class="label">Note</span>
+            <input name="note" placeholder="Who is it for?" maxlength="200" />
+          </label>
+          <button class="btn btn-blue" type="submit">Create code</button>
+        </form>
+        <p class="form-msg" id="create-msg" role="status"></p>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">Promo codes</h2>
+          <input class="filter" id="filter" placeholder="Filter codes" />
+        </div>
+        <div class="table-wrap">
+          <table class="codes">
+            <thead><tr><th>Code</th><th>Plan</th><th>Duration</th><th>Uses</th><th>Valid until</th><th>Note</th><th>Status</th><th></th></tr></thead>
+            <tbody id="codes"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" hidden></div>
+  </body>
+</html>
