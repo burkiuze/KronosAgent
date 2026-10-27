@@ -52,6 +52,8 @@ rt.updateConfig(fakeOpenAi);
 const freshRt = await Kronos.create({ home: freshHome, cwd: ws, connectMcp: false, logLevel: 'silent', overrides: { skills: { claudeCompat: false } } });
 freshRt.updateConfig(fakeOpenAi);
 
+// the main runtime has been through the first-run screen already
+rt.account.skip();
 const gw = await Gateway.start(rt, { port: 0, host: '127.0.0.1', platforms: false, cron: false, token: 'e2e-token', quiet: true });
 const freshGw = await Gateway.start(freshRt, { port: 0, host: '127.0.0.1', platforms: false, cron: false, token: 'e2e-token', quiet: true });
 const browser = await chromium.launch();
@@ -87,8 +89,20 @@ async function nav(label) {
 let failed = false;
 try {
   console.log(`Kronos e2e — fresh install ${freshGw.url}`);
-  await check('first launch asks to connect a model provider', async () => {
+  await check('first launch offers sign in, create account, or no account', async () => {
     await page.goto(`${freshGw.url}/?token=e2e-token`);
+    const card = page.locator('.onboarding-card');
+    await card.locator('h1', { hasText: 'Welcome to Kronos' }).waitFor({ timeout: 15000 });
+    await card.locator('.btn', { hasText: 'Sign in' }).waitFor();
+    await card.locator('.btn', { hasText: 'Create account' }).waitFor();
+    await card.locator('.link-btn', { hasText: 'Continue without an account' }).click();
+    await page.locator('.onboarding').waitFor({ state: 'detached', timeout: 5000 });
+    // remembered: a reload goes straight to the app
+    await page.reload();
+    await page.locator('.welcome-title', { hasText: 'KRONOS AGENT' }).waitFor({ timeout: 15000 });
+    if (await page.locator('.onboarding').count()) throw new Error('the first-run screen came back');
+  });
+  await check('first launch asks to connect a model provider', async () => {
     await page.locator('.welcome-title', { hasText: 'KRONOS AGENT' }).waitFor({ timeout: 15000 });
     await page.locator('.welcome .connect-card', { hasText: 'Connect a model to get started' }).waitFor({ timeout: 5000 });
     await page.locator('.welcome .connect-chip', { hasText: 'Connect a model' }).waitFor({ timeout: 5000 });
@@ -244,6 +258,22 @@ try {
       return (await r.json()).config.model.default === 'openai:gpt-fake-large';
     }, null, { timeout: 5000 });
     await openaiTile.locator('.pv-state.on').waitFor();
+    await page.keyboard.press('Escape');
+  });
+  await check('membership settings and locked Kronos Cloud models', async () => {
+    await page.keyboard.press('Control+,');
+    await page.locator('.settings-nav-item', { hasText: 'Membership' }).click();
+    await page.locator('.membership .set-title', { hasText: 'Not signed in' }).waitFor({ timeout: 5000 });
+    const plans = await page.locator('.membership .plan-name').allTextContents();
+    if (plans.join(',') !== 'Lite,Pro,Max,Max 5') throw new Error(`plans: ${plans.join(',')}`);
+    await page.locator('.membership .cloud-model', { hasText: 'GLM 5.3 Flash' }).waitFor();
+    await page.keyboard.press('Escape');
+    // the model picker lists them, locked; choosing one leads to Membership instead of switching
+    await page.locator('.sb-item.model').click();
+    const row = page.locator('.model-row.locked', { hasText: 'DeepSeek V4.1 Flash 1017' });
+    await row.locator('.model-lock', { hasText: 'Sign in' }).waitFor({ timeout: 5000 });
+    await row.click();
+    await page.locator('.settings-nav-item.active', { hasText: 'Membership' }).waitFor({ timeout: 5000 });
     await page.keyboard.press('Escape');
   });
   await check('command palette', async () => {

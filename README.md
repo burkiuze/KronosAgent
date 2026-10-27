@@ -7,7 +7,7 @@
 **One self-improving agent for your terminal, your desktop and every chat app you use.**
 It codes, researches, automates and remembers — with any model, on your machine.
 
-[Quick start](#quick-start) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [GitHub](docs/GITHUB.md) · [Code review](docs/REVIEW.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Research](docs/RESEARCH.md) · [Türkçe](#türkçe)
+[Quick start](#quick-start) · [Account](docs/ACCOUNT.md) · [Features](#what-you-get) · [How it compares](docs/ANALYSIS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Messaging](docs/MESSAGING.md) · [GitHub](docs/GITHUB.md) · [Code review](docs/REVIEW.md) · [Security](docs/SECURITY.md) · [Performance](docs/PERFORMANCE.md) · [Research](docs/RESEARCH.md) · [Türkçe](#türkçe)
 
 <img src="docs/assets/chat-dark.png" alt="Kronos desktop: chat with tool calls, live plan and the files panel" width="900" />
 
@@ -54,6 +54,11 @@ Windows and Linux are produced by the release workflow), or with Docker:
 cp .env.example .env    # add keys + KRONOS_GATEWAY_TOKEN
 docker compose up -d    # → http://localhost:7777/?token=<KRONOS_GATEWAY_TOKEN>
 ```
+
+On first start Kronos offers to **sign in**, **create an account** or **continue without one**.
+An account unlocks **Kronos Cloud** models (GLM 5.3 Flash, MiniMax M3.1 Flash, Nemotron 3.5 Super VL,
+DeepSeek V4.1 Flash) with a Lite, Pro, Max or Max 5 membership; your own API keys always work without
+one. See [docs/ACCOUNT.md](docs/ACCOUNT.md).
 
 No API key yet? Kronos opens and asks you to connect a model provider first — the welcome
 screen, the composer and the status bar all have a **Connect a provider** button that goes

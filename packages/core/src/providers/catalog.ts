@@ -1,4 +1,5 @@
 import type { ModelInfo } from '../types.js';
+import { DEFAULT_CLOUD_MODELS } from '../account/account.js';
 
 /**
  * Built-in provider + model catalog. Every OpenAI-compatible endpoint works even if
@@ -40,6 +41,8 @@ export const PROVIDERS: ProviderPreset[] = [
   { id: 'zai', label: 'Z.ai (GLM)', api: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', envKeys: ['ZAI_API_KEY'], keyRequired: true, defaultModel: 'glm-4.6' },
   { id: 'ollama', label: 'Ollama (local)', api: 'openai', baseUrl: 'http://127.0.0.1:11434', envKeys: [], keyRequired: false, local: true, defaultModel: 'qwen3-coder:30b' },
   { id: 'lmstudio', label: 'LM Studio (local)', api: 'openai', baseUrl: 'http://127.0.0.1:1234', envKeys: [], keyRequired: false, local: true, defaultModel: 'local-model' },
+  // Kronos Cloud: models served for members, signed in with a Kronos account instead of an API key
+  { id: 'cloud', label: 'Kronos Cloud', api: 'openai', baseUrl: 'https://heynavio.com/api/kronos/v1', envKeys: ['KRONOS_CLOUD_TOKEN'], keyRequired: true, docsUrl: 'https://heynavio.com/kronosagent', defaultModel: 'glm-5.3-flash' },
   { id: 'kronos', label: 'Kronos Demo (offline)', api: 'demo', baseUrl: '', envKeys: [], keyRequired: false, local: true, defaultModel: 'demo' },
 ];
 
@@ -111,6 +114,7 @@ const OTHERS: Record<string, M[]> = {
     { id: 'gpt-oss:20b', name: 'gpt-oss 20B (local)', contextWindow: 131_072, maxOutput: 16_384, tools: true },
     { id: 'llama3.3', name: 'Llama 3.3 (local)', contextWindow: 131_072, maxOutput: 8_192, tools: true },
   ],
+  cloud: DEFAULT_CLOUD_MODELS.map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, maxOutput: m.maxOutput, vision: m.vision, tools: true, description: `${m.description ?? ''} Served by ${m.provider}.`.trim() })),
   kronos: [
     { id: 'demo', name: 'Kronos Demo (offline)', contextWindow: 200_000, maxOutput: 8_192, tools: true, vision: true, description: 'Scripted offline model for trying the app without an API key.' },
   ],

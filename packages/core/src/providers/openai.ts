@@ -110,9 +110,11 @@ export class OpenAICompatProvider implements Provider {
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       let msg = text;
+      let code: string | undefined;
       try {
-        const j = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
+        const j = JSON.parse(text) as { error?: { message?: string; code?: string } | string; message?: string };
         msg = (typeof j.error === 'string' ? j.error : j.error?.message) ?? j.message ?? text;
+        code = typeof j.error === 'object' ? j.error?.code : undefined;
       } catch {
         /* not json */
       }
@@ -126,7 +128,8 @@ export class OpenAICompatProvider implements Provider {
         `${this.opts.label ?? this.id} error ${res.status}: ${msg.slice(0, 800)}`,
         this.id,
         res.status,
-        isRetryableStatus(res.status),
+        // a used-up plan allowance or a missing membership does not clear up by retrying
+        isRetryableStatus(res.status) && code !== 'usage_limit' && code !== 'membership_required',
         parseRetryAfter(res.headers.get('retry-after')),
       );
     }

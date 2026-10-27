@@ -90,6 +90,8 @@ export interface ModelInfo {
   vision?: boolean;
   description?: string;
   tags?: string[];
+  /** Kronos Cloud: listed but needs sign-in or a membership */
+  locked?: 'sign_in' | 'membership';
 }
 
 export interface PermissionRequest {

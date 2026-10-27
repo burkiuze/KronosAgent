@@ -34,7 +34,8 @@ import type { Gateway } from './server.js';
 
 const SECRET_ENV_KEYS = [
   ...new Set([
-    ...PROVIDERS.flatMap((p) => p.envKeys),
+    // the Kronos Cloud token is managed by signing in (Settings → Membership), not pasted as a key
+    ...PROVIDERS.flatMap((p) => p.envKeys).filter((k) => k !== 'KRONOS_CLOUD_TOKEN'),
     'TAVILY_API_KEY', 'BRAVE_API_KEY', 'EXA_API_KEY', 'SERPER_API_KEY', 'JINA_API_KEY', 'SEARXNG_URL', 'FAL_KEY', 'REPLICATE_API_TOKEN',
     'ELEVENLABS_API_KEY', 'TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'MATRIX_ACCESS_TOKEN',
     'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN', 'KRONOS_GATEWAY_TOKEN', 'KRONOS_WEBHOOK_SECRET', 'HASS_TOKEN', 'GITHUB_TOKEN',
@@ -150,7 +151,7 @@ export function buildApi(gw: Gateway): Router {
   });
 
   // ---------------------------------------------------------------- models
-  r.get('/api/providers', () => rt().providers.statuses());
+  r.get('/api/providers', () => rt().providers.statuses().filter((p) => p.id !== 'cloud'));
   r.post('/api/providers/:id/test', async (req) => {
     const b = await req.body<{ apiKey?: string }>().catch(() => ({}) as { apiKey?: string });
     return rt().providers.testConnection(req.params.id as string, { apiKey: b.apiKey?.trim() || undefined });
@@ -170,6 +171,62 @@ export function buildApi(gw: Gateway): Router {
     }
     return { ...result, saved: result.ok };
   });
+  // ---------------------------------------------------------------- Kronos account
+  r.get('/api/account', () => rt().account.status());
+  r.post('/api/account/refresh', () => rt().account.refresh());
+  /** Starts signing in: returns the heynavio.com address to open; the browser comes back to /api/account/callback. */
+  r.post('/api/account/login', async (req) => {
+    const b = await req.body<{ origin?: string; mode?: 'sign-in' | 'sign-up' }>();
+    let origin: string;
+    try {
+      const u = new URL(b.origin ?? '');
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad scheme');
+      origin = u.origin;
+    } catch {
+      throw new HttpError(400, 'origin must be the address Kronos is open at, e.g. http://127.0.0.1:7777');
+    }
+    return rt().account.startLogin(`${origin}/api/account/callback`, { mode: b.mode === 'sign-up' ? 'sign-up' : 'sign-in' });
+  });
+  // reached by a redirect from heynavio.com, so without the gateway token: the one-time state proves it
+  r.get('/api/account/callback', async (req, res) => {
+    const code = req.query.get('code');
+    const state = req.query.get('state') ?? '';
+    let title = 'Kronos is connected';
+    let body = 'You are signed in. You can close this tab and go back to Kronos.';
+    if (req.query.get('error')) {
+      title = 'Sign-in cancelled';
+      body = 'Nothing was connected. You can close this tab.';
+    } else {
+      try {
+        if (!code) throw new Error('The sign-in link is missing its code.');
+        const s = await rt().account.completeLogin(code, state);
+        if (s.account?.email) body = `You are signed in as ${s.account.email}. You can close this tab and go back to Kronos.`;
+      } catch (e) {
+        title = 'Sign-in did not finish';
+        body = `${(e as Error).message} Start signing in again from Kronos.`;
+      }
+    }
+    const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+    res.end(
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(title)}</title>` +
+        `<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0b0d;color:#ececf1;font:15px/1.5 system-ui,sans-serif">` +
+        `<div style="max-width:420px;padding:32px;text-align:center"><h1 style="font-size:22px;margin:0 0 10px">${esc(title)}</h1><p style="color:#a1a1aa;margin:0">${esc(body)}</p></div>` +
+        `<script>setTimeout(function(){try{window.close()}catch(e){}},2500)</script>`,
+    );
+  });
+  r.post('/api/account/redeem', async (req) => {
+    const { code } = await req.body<{ code: string }>();
+    if (!code?.trim()) throw new HttpError(400, 'code is required');
+    try {
+      return await rt().account.redeem(code);
+    } catch (e) {
+      throw new HttpError((e as { status?: number }).status === 401 ? 401 : 400, (e as Error).message);
+    }
+  });
+  r.post('/api/account/logout', () => rt().account.logout());
+  r.post('/api/account/skip', () => rt().account.skip());
+
   // ---------------------------------------------------------------- GitHub
   r.get('/api/github/status', () => rt().github.status());
   /** Connect with a personal access token: checked against GitHub, then kept in .env (never in config). */

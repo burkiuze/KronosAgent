@@ -237,6 +237,8 @@ export interface KronosConfig {
   };
   updates: { channel: 'stable' | 'beta'; autoCheck: boolean };
   telemetry: { enabled: boolean };
+  /** Kronos account and Kronos Cloud (heynavio.com); empty url = the official service */
+  cloud: { url: string };
   github: {
     /** REST API root (GitHub Enterprise: https://ghe.example.com/api/v3) */
     apiUrl: string;
@@ -409,6 +411,7 @@ export function defaultConfig(): KronosConfig {
     },
     updates: { channel: 'stable', autoCheck: true },
     telemetry: { enabled: false },
+    cloud: { url: '' },
     github: {
       apiUrl: 'https://api.github.com',
       webUrl: 'https://github.com',

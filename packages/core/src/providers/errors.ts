@@ -34,7 +34,9 @@ export class NotConnectedError extends Error {
   readonly code = 'no_provider';
   constructor(readonly provider?: string) {
     super(
-      provider
+      provider === 'cloud'
+        ? 'Kronos Cloud models need a Kronos account with a membership. Sign in and choose a plan (or redeem a promo code) in Settings → Membership, or pick a model from your own provider.'
+        : provider
         ? `The ${provider} provider is not connected. Add its API key in Settings → Providers & API keys (or run \`kronos setup\`).`
         : 'No model provider is connected. Connect one in Settings → Providers & API keys (or run `kronos setup`).',
     );

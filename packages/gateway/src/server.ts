@@ -174,7 +174,9 @@ export class Gateway {
       // public webhooks (verified by their own secrets)
       if (url.pathname.startsWith('/hooks/')) return await this.hooks(req, res, url);
       const isApi = url.pathname.startsWith('/api/') || url.pathname.startsWith('/v1/');
-      if (isApi && !this.authorized(req, url) && url.pathname !== '/api/health') {
+      // the sign-in callback arrives from heynavio.com without the token; its one-time state guards it
+      const publicApi = url.pathname === '/api/health' || (url.pathname === '/api/account/callback' && req.method === 'GET');
+      if (isApi && !this.authorized(req, url) && !publicApi) {
         sendJson(res, 401, { error: 'unauthorized — pass the gateway token as Bearer, ?token= or cookie' });
         return;
       }

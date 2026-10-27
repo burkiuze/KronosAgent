@@ -88,3 +88,25 @@ describe('no provider connected', () => {
     }
   });
 });
+
+describe('Kronos account over the gateway', () => {
+  it('starts a sign-in for the address Kronos is open at, and lets only the callback through without the token', async () => {
+    expect((await (await api('/api/account')).json()).onboarded).toBe(false);
+    const start = await (await api('/api/account/login', { method: 'POST', body: JSON.stringify({ origin: gw.url, mode: 'sign-in' }) })).json();
+    const url = new URL(start.url);
+    expect(url.pathname).toBe('/kronosagent/connect');
+    expect(url.searchParams.get('redirect_uri')).toBe(`${gw.url}/api/account/callback`);
+    expect(url.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // no gateway token: the callback answers (and refuses an unknown state); the rest stays closed
+    const cb = await fetch(`${gw.url}/api/account/callback?code=x&state=not-mine`);
+    expect(cb.status).toBe(200);
+    expect(await cb.text()).toContain('Sign-in did not finish');
+    expect((await fetch(`${gw.url}/api/account`)).status).toBe(401);
+    expect((await fetch(`${gw.url}/api/account/callback?code=x&state=y`, { method: 'POST' })).status).toBe(401);
+    expect((await api('/api/account/login', { method: 'POST', body: JSON.stringify({ origin: 'javascript:alert(1)' }) })).status).toBe(400);
+    // the token is managed by signing in, not listed with API keys; the provider list leaves it out
+    expect(((await (await api('/api/keys')).json()).keys as { name: string }[]).some((k) => k.name === 'KRONOS_CLOUD_TOKEN')).toBe(false);
+    expect(((await (await api('/api/providers')).json()) as { id: string }[]).some((p) => p.id === 'cloud')).toBe(false);
+    expect((await (await api('/api/account/skip', { method: 'POST' })).json()).onboarded).toBe(true);
+  });
+});

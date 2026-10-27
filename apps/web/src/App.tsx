@@ -8,6 +8,8 @@ import { SettingsModal } from './components/Settings';
 import { RepoPicker } from './components/GitHub';
 import { CommandPalette } from './components/CommandPalette';
 import { Toasts } from './components/Toasts';
+import { Onboarding } from './components/Account';
+import { loadAccount } from './lib/account';
 import { SkillsPage } from './pages/Skills';
 import { ArtifactsPage } from './pages/Artifacts';
 import { MessagingPage } from './pages/Messaging';
@@ -69,6 +71,11 @@ export function App() {
   const desktop = (window as unknown as { kronosDesktop?: DesktopBridge }).kronosDesktop;
 
   useEffect(() => desktop?.onCommand?.(runDesktopCommand), []);
+
+  // the account decides whether the first-run screen shows; plan and usage refresh in the background
+  useEffect(() => {
+    void loadAccount().then((s) => s?.signedIn && void loadAccount(true));
+  }, []);
 
   // back from GitHub after creating or installing the Kronos GitHub App
   useEffect(() => {
@@ -204,6 +211,7 @@ export function App() {
       <RepoPicker />
       <CommandPalette />
       <Toasts />
+      <Onboarding />
     </div>
   );
 }

@@ -31,6 +31,7 @@ import { Repl } from './repl.js';
 import { runSetup } from './setup.js';
 import { importFrom } from './importers.js';
 import { cmdReview } from './review.js';
+import { cmdAccount, cmdLogin, cmdLogout, cmdRedeem } from './account.js';
 import { EventRenderer } from './ui/render.js';
 import { c, logo, sym } from './ui/ansi.js';
 
@@ -44,6 +45,10 @@ ${c.bold('Usage')}
   kronos desktop                  launch the Kronos desktop app
   kronos gateway                  run the gateway: desktop/web backend, messaging, cron, API
   kronos setup                    interactive setup wizard
+
+${c.bold('Account')}
+  kronos login [--sign-up]        sign in or create a Kronos account (Kronos Cloud models)
+  kronos account · kronos redeem <code> · kronos logout
 
 ${c.bold('Manage')}
   kronos model [list|set <ref>]   models & providers        kronos keys [list|set|unset]
@@ -164,6 +169,14 @@ export async function main(argv: string[]): Promise<void> {
     case 'github':
     case 'gh':
       return withRt(args, (rt) => cmdGitHub(rt, pos));
+    case 'login':
+      return withRt(args, (rt) => cmdLogin(rt, { signUp: Boolean(args.flags['sign-up']), openBrowser }));
+    case 'logout':
+      return withRt(args, (rt) => cmdLogout(rt));
+    case 'account':
+      return withRt(args, (rt) => cmdAccount(rt, pos));
+    case 'redeem':
+      return withRt(args, (rt) => cmdRedeem(rt, pos[0]));
     case 'skills':
     case 'skill':
       return withRt(args, (rt) => cmdSkills(rt, pos, args));

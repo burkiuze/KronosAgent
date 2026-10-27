@@ -38,6 +38,13 @@ const ORDER = ['anthropic', 'openai', 'gemini', 'openrouter', 'deepseek', 'xai',
 
 export function ProviderLogo({ id, label, size = 30 }: { id: string; label: string; size?: number }) {
   const svg = PROVIDER_LOGOS[id];
+  if (id === 'cloud') {
+    return (
+      <span className="pv-badge" style={{ width: size, height: size }} title={label}>
+        <img src={`${import.meta.env.BASE_URL}kronos-128.png`} width={size - 4} height={size - 4} alt="" style={{ borderRadius: 4 }} />
+      </span>
+    );
+  }
   return (
     <span className="pv-badge" style={{ width: size, height: size }} title={label}>
       {svg ? <span className="pv-logo" dangerouslySetInnerHTML={{ __html: svg }} /> : <span className="pv-initials">{label.replace(/[^A-Za-z0-9]/g, '').slice(0, 2)}</span>}

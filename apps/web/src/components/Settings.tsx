@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Search,
   Github,
+  Crown,
 } from 'lucide-react';
 import { api, del, downloadUrl, get, post, put } from '../lib/api';
 import { setState, toast, useStore } from '../lib/store';
@@ -34,6 +35,7 @@ import { Badge, Modal, Toggle } from './ui';
 import { KronosMark } from './Logo';
 import { ProviderConnect } from './ProviderConnect';
 import { GitHubSettings } from './GitHub';
+import { MembershipSettings } from './Account';
 import type { McpStatus, ModelInfo } from '../lib/types';
 
 type Kind = 'toggle' | 'select' | 'number' | 'text' | 'textarea' | 'list' | 'model';
@@ -238,6 +240,7 @@ const SECTIONS: { id: string; label: string; icon: typeof Sparkles; group: numbe
   { id: 'memory', label: 'Memory & Context', icon: Brain, group: 0 },
   { id: 'voice', label: 'Voice', icon: Mic, group: 0 },
   { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, group: 0 },
+  { id: 'membership', label: 'Membership', icon: Crown, group: 1 },
   { id: 'gateway', label: 'Gateway', icon: Radio, group: 1 },
   { id: 'keys', label: 'Providers & API keys', icon: KeyRound, group: 1 },
   { id: 'tools', label: 'Skills & Tools', icon: Package, group: 1 },
@@ -628,7 +631,7 @@ export function SettingsModal() {
   if (!section) return null;
   const close = () => setState({ settings: null });
   const defs = q ? matches : DEFS.filter((d) => d.section === section);
-  const custom = !q && ['appearance', 'keys', 'github', 'mcp', 'tools', 'about'].includes(section);
+  const custom = !q && ['appearance', 'membership', 'keys', 'github', 'mcp', 'tools', 'about'].includes(section);
   const meta = SECTIONS.find((s) => s.id === section);
   return (
     <Modal open onClose={close} className="settings-modal" wide>
@@ -691,6 +694,8 @@ export function SettingsModal() {
             (custom ? (
               section === 'appearance' ? (
                 <Appearance config={config} />
+              ) : section === 'membership' ? (
+                <MembershipSettings />
               ) : section === 'keys' ? (
                 <Keys />
               ) : section === 'github' ? (

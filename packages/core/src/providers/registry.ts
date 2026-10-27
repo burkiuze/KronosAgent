@@ -46,7 +46,13 @@ function describeConnectionError(e: unknown): string {
 }
 
 /** Auto-selection order when model.default is "auto". */
-const AUTO_ORDER = ['anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras'];
+const AUTO_ORDER = ['anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras', 'cloud'];
+
+/** How the registry sees the Kronos account (set by the runtime). */
+export interface CloudAccess {
+  access(): { signedIn: boolean; member: boolean };
+  apiBase(): string;
+}
 
 /** consecutive failed requests (after retries) before a provider is skipped for a while */
 const BREAKER_THRESHOLD = 3;
@@ -69,7 +75,20 @@ export class ProviderRegistry {
     return out;
   }
 
+  private cloud?: CloudAccess;
+
   constructor(private config: KronosConfig) {}
+
+  setCloud(cloud: CloudAccess): void {
+    this.cloud = cloud;
+    this.cache.delete('cloud');
+  }
+
+  /** Why a Kronos Cloud model cannot run yet, if it cannot. */
+  cloudLock(): 'sign_in' | 'membership' | undefined {
+    const a = this.cloud?.access() ?? { signedIn: Boolean(this.keyFor('cloud')), member: false };
+    return !a.signedIn ? 'sign_in' : !a.member ? 'membership' : undefined;
+  }
 
   updateConfig(config: KronosConfig): void {
     this.config = config;
@@ -130,6 +149,7 @@ export class ProviderRegistry {
 
   isConfigured(id: string): boolean {
     if (id === 'kronos') return true;
+    if (id === 'cloud') return !this.cloudLock();
     const preset = getPreset(id);
     const custom = this.config.customProviders.find((c) => c.id === id);
     if (custom) return Boolean(custom.baseUrl);
@@ -198,7 +218,7 @@ export class ProviderRegistry {
       provider = new OpenAICompatProvider({
         id,
         label: preset.label,
-        baseUrl: cfg.baseUrl || preset.baseUrl,
+        baseUrl: cfg.baseUrl || (id === 'cloud' && this.cloud ? this.cloud.apiBase() : preset.baseUrl),
         apiKey: apiKey ?? this.keyFor(id),
         keyRequired: preset.keyRequired,
         envKeys: preset.envKeys,
@@ -273,10 +293,12 @@ export class ProviderRegistry {
 
   async listModels(providerId?: string): Promise<ModelInfo[]> {
     const catalog = catalogModels();
-    const ids = providerId ? [providerId] : this.statuses().filter((s) => s.configured).map((s) => s.id);
+    // Kronos Cloud models are always listed; without sign-in or a membership they show as locked
+    const ids = providerId ? [providerId] : [...new Set([...this.statuses().filter((s) => s.configured).map((s) => s.id), 'cloud'])];
     const out: ModelInfo[] = [];
+    const lock = this.cloudLock();
     for (const id of ids) {
-      const known = catalog.filter((m) => m.provider === id);
+      const known = catalog.filter((m) => m.provider === id).map((m) => (id === 'cloud' && lock ? { ...m, locked: lock } : m));
       out.push(...known);
       const custom = this.config.customProviders.find((c) => c.id === id);
       for (const m of custom?.models ?? []) if (!out.some((x) => x.ref === `${id}:${m}`)) out.push(genericModel(id, m));

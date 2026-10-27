@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Check, KeyRound, Star } from 'lucide-react';
+import { Check, KeyRound, Lock, Star } from 'lucide-react';
 import { get } from '../lib/api';
 import { getState, setSessionModel, setState, toast, useStore } from '../lib/store';
 import { updateConfig } from '../lib/config';
@@ -32,7 +32,7 @@ export function ModelPicker({ children, compact, down }: { children: ReactNode; 
     if (!open) return;
     void Promise.all([get<{ models: ModelInfo[] }>('/api/models'), get<ProviderStatus[]>('/api/providers')]).then(([m, p]) => {
       setModels(m.models);
-      setProviders(p);
+      setProviders([...p, { id: 'cloud', label: 'Kronos Cloud', configured: true, local: false }]);
     });
   }, [open]);
 
@@ -47,6 +47,14 @@ export function ModelPicker({ children, compact, down }: { children: ReactNode; 
   }, [models, q]);
 
   const choose = async (ref: string) => {
+    const locked = models.find((m) => m.ref === ref)?.locked;
+    if (locked) {
+      // Kronos Cloud without an account or membership: show how to unlock it instead
+      setOpen(false);
+      toast(locked === 'sign_in' ? 'Sign in to use Kronos Cloud models' : 'Kronos Cloud models need a membership', 'info');
+      setState({ settings: 'membership' });
+      return;
+    }
     setOpen(false);
     const id = getState().currentId;
     if (id) {
@@ -80,7 +88,7 @@ export function ModelPicker({ children, compact, down }: { children: ReactNode; 
                     {providers.find((p) => p.id === provider)?.label ?? provider}
                   </div>
                   {list.map((m) => (
-                    <button key={m.ref} className={`model-row ${m.ref === current ? 'active' : ''}`} onClick={() => void choose(m.ref)}>
+                    <button key={m.ref} className={`model-row ${m.ref === current ? 'active' : ''} ${m.locked ? 'locked' : ''}`} onClick={() => void choose(m.ref)} title={m.locked ? (m.locked === 'sign_in' ? 'Sign in to unlock' : 'Needs a membership') : undefined}>
                       <div>
                         <div className="model-name">
                           {m.name} {m.tags?.includes('recommended') && <Star size={11} className="accent" />}
@@ -89,7 +97,13 @@ export function ModelPicker({ children, compact, down }: { children: ReactNode; 
                           {m.ref} · {tokens(m.contextWindow)} ctx{m.pricing ? ` · $${m.pricing.input}/$${m.pricing.output}` : ''}
                         </div>
                       </div>
-                      {m.ref === current && <Check size={14} />}
+                      {m.locked ? (
+                        <span className="model-lock">
+                          <Lock size={11} /> {m.locked === 'sign_in' ? 'Sign in' : 'Membership'}
+                        </span>
+                      ) : (
+                        m.ref === current && <Check size={14} />
+                      )}
                     </button>
                   ))}
                 </div>

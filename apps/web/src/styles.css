@@ -4449,3 +4449,198 @@ button.sb-item:hover,
   flex: none;
   margin: 0;
 }
+
+/* ---------------------------------------------------------------- Kronos account */
+
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  padding: 24px;
+}
+
+.onboarding-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.onboarding-card h1 {
+  margin: 6px 0 0;
+  font-size: 1.6em;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.onboarding-card p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.onboarding-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.onboarding-actions .btn {
+  justify-content: center;
+  padding: 10px 14px;
+}
+
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 6px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.membership .row.gap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.membership input.mono {
+  font-family: var(--mono);
+  width: 180px;
+}
+
+.membership .set-row.column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.membership .set-desc svg {
+  vertical-align: -1px;
+}
+
+.membership .set-desc.link {
+  color: var(--accent);
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+.usage-row {
+  gap: 28px;
+}
+
+.usage-meter {
+  flex: 1;
+  min-width: 0;
+}
+
+.usage-meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.88em;
+  margin-bottom: 6px;
+}
+
+.usage-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--hover);
+  overflow: hidden;
+  margin-bottom: 5px;
+}
+
+.usage-bar > div {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.usage-bar > div.hot {
+  background: var(--danger);
+}
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.plan-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--panel);
+}
+
+.plan-card.current {
+  border-color: var(--accent);
+}
+
+.plan-name {
+  font-weight: 650;
+}
+
+.plan-mult {
+  font-size: 0.8em;
+  color: var(--accent);
+  margin: 2px 0 6px;
+}
+
+.plan-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 0.7em;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.cloud-model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.88em;
+}
+
+.cloud-model-name {
+  font-weight: 550;
+}
+
+.cloud-model .mono {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+.model-row.locked {
+  opacity: 0.55;
+}
+
+.model-row.locked:hover {
+  opacity: 0.8;
+}
+
+.model-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75em;
+  color: var(--faint);
+  white-space: nowrap;
+}

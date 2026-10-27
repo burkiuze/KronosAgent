@@ -12,6 +12,7 @@ import { ToolRegistry } from './tools/registry.js';
 import { fileTools } from './tools/files.js';
 import { repoMapTool } from './tools/repomap.js';
 import { GitHubService } from './github/github.js';
+import { AccountService } from './account/account.js';
 import { githubTool } from './github/tool.js';
 import { ReviewEngine } from './review/engine.js';
 import { codeReviewTool } from './review/tool.js';
@@ -132,6 +133,7 @@ export class Kronos {
   mcp!: McpManager;
   backend!: ExecBackend;
   github!: GitHubService;
+  account!: AccountService;
   review!: ReviewEngine;
   recaps!: SessionRecaps;
   readonly lsp = new LspManager();
@@ -157,6 +159,8 @@ export class Kronos {
     configureLogger({ level: opts.logLevel, file: join(k.paths.logs, 'kronos.log') });
     k.loadConfig(opts.overrides);
     k.providers = new ProviderRegistry(k.config);
+    k.account = new AccountService(k);
+    k.providers.setCloud({ access: () => k.account.access(), apiBase: () => k.account.apiBase() });
     k.memory = new MemoryStore(k.paths.memories, { memory: k.config.memory.memoryCharLimit, user: k.config.memory.userCharLimit });
     k.skills = new SkillRegistry(k.skillDirs(), k.config.skills.disabled);
     k.sessions = openSessionStore(k.paths.sessionsDb, k.paths.sessionsDir);

@@ -13,7 +13,7 @@ export { defaultConfig, ALL_TOOLSETS, CONFIG_SECTIONS, type KronosConfig, type M
 export { loadConfig, readYamlFile, writeYamlFile, maskSecrets, saveConfigPatch, setConfigValue, getConfigValue } from './config/load.js';
 export { kronosHome, profileDir, profilePaths, listProfiles, activeProfile, setActiveProfile, expandHome, resolvePath, bundledSkillsDir, PROFILE_NAME_RE } from './config/paths.js';
 
-export { ProviderRegistry, modelAliases, aliasFor, type ProviderStatus, type ConnectionTest } from './providers/registry.js';
+export { ProviderRegistry, modelAliases, aliasFor, type ProviderStatus, type ConnectionTest, type CloudAccess } from './providers/registry.js';
 export { PROVIDERS, catalogModels, parseModelRef, costOf, getPreset, type ProviderPreset } from './providers/catalog.js';
 export { AnthropicProvider, toAnthropicMessages } from './providers/anthropic.js';
 export { OpenAICompatProvider, toOpenAIMessages, extractInlineToolCalls } from './providers/openai.js';
@@ -63,4 +63,5 @@ export { parseStructured } from './runtime.js';
 export { validateValue } from './util/schema.js';
 export { hostMatches, hostAllowed, isPrivateAddress, NetworkProxy } from './backends/netproxy.js';
 export { detectSandbox, wrapCommand, writableRoots, seatbeltProfile, describeSandbox, projectRoot, type SandboxConfig } from './backends/sandbox.js';
+export { AccountService, AccountError, CLOUD_PROVIDER, CLOUD_TOKEN_ENV, DEFAULT_CLOUD_URL, DEFAULT_CLOUD_MODELS, DEFAULT_PLANS, type AccountStatus, type CloudAccount, type CloudModel, type CloudPlan, type UsageWindowView } from './account/account.js';
 export { GitHubService, GitHubError, parseGitHubRemote, type GitHubAppCredentials, type GitHubRepo, type GitHubStatus } from './github/github.js';

@@ -212,6 +212,8 @@ export interface ModelInfo {
   noSampling?: boolean;
   description?: string;
   tags?: string[];
+  /** listed but not usable yet: Kronos Cloud models before sign-in or without a membership */
+  locked?: 'sign_in' | 'membership';
 }
 
 export interface ChatRequest {
