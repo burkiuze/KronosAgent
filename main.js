@@ -8,6 +8,18 @@
   // Commands point at whatever host serves this page, so they stay right on any domain.
   const ORIGIN = /^https?:$/.test(location.protocol) ? location.origin : "https://kronos-agent.vercel.app";
 
+  // Social links in the header. Until a URL is set, the icon points at the community footer.
+  const SOCIAL = { discord: "", x: "" };
+  $$("[data-social]").forEach((a) => {
+    const url = SOCIAL[a.dataset.social];
+    if (url) {
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+    } else {
+      a.href = "#community";
+    }
+  });
 
   /* ───────────── mobile menu ───────────── */
 
