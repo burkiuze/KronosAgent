@@ -132,6 +132,56 @@ function hideWindow(): void {
   releaseTimer.unref();
 }
 
+// Signing in to Kronos Cloud happens in a window of the app, not the system browser: the
+// heynavio.com connect page loads here and, once it returns to the gateway's callback, closes.
+let authWin: BrowserWindow | null = null;
+
+function isConnectUrl(target: string): boolean {
+  try {
+    const u = new URL(target);
+    return u.protocol === 'https:' && u.pathname.startsWith('/kronosagent/');
+  } catch {
+    return false;
+  }
+}
+
+function openAuthWindow(target: string): void {
+  if (authWin) {
+    void authWin.loadURL(target);
+    authWin.focus();
+    return;
+  }
+  authWin = new BrowserWindow({
+    parent: win ?? undefined,
+    width: 480,
+    height: 760,
+    minWidth: 380,
+    minHeight: 560,
+    title: 'Sign in to Kronos',
+    icon: appIcon(),
+    backgroundColor: '#0b0e1f',
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, partition: 'persist:kronos-account' },
+  });
+  const done = (url: string) => {
+    if (backend && url.startsWith(`${backend.url}/api/account/callback`)) setTimeout(() => authWin?.close(), 1200);
+  };
+  authWin.webContents.on('did-navigate', (_e, url) => done(url));
+  authWin.webContents.on('will-navigate', (e, url) => {
+    // stay on heynavio.com, its sign-in providers and the gateway callback; anything else opens outside
+    if (!/^https:\/\//.test(url) && !(backend && url.startsWith(backend.url))) {
+      e.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+  authWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?|mailto):/.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  authWin.on('closed', () => (authWin = null));
+  void authWin.loadURL(target);
+}
+
 /** Messages to the UI; a (re)built window gets them once its page and preload have loaded. */
 function deliver(channel: string, value: string): void {
   if (!win) return;
@@ -180,8 +230,9 @@ function createWindow(): void {
 
   // links open in the real browser; the app itself never navigates away
   win.webContents.setWindowOpenHandler(({ url: target }) => {
-    // downloads/exports from the gateway and external links both go to the default browser
-    if (/^(https?|mailto):/.test(target)) void shell.openExternal(target);
+    // signing in stays in the app; downloads/exports and other links go to the default browser
+    if (isConnectUrl(target)) openAuthWindow(target);
+    else if (/^(https?|mailto):/.test(target)) void shell.openExternal(target);
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (e, target) => {

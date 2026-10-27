@@ -3,7 +3,7 @@
   "productName": "Kronos",
   "version": "1.0.0",
   "private": true,
-  "description": "KRONOS Desktop \u2014 native shell for Kronos Agent.",
+  "description": "KRONOS Desktop — native shell for Kronos Agent.",
   "license": "Apache-2.0",
   "author": "Kronos Agent contributors",
   "main": "dist/main.cjs",
@@ -39,8 +39,18 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
       "icon": "build/icon.png",
       "hardenedRuntime": true,
@@ -66,7 +76,8 @@
       {
         "provider": "github",
         "owner": "burkiuze",
-        "repo": "KronosAgent"
+        "repo": "KronosAgent",
+        "releaseType": "release"
       }
     ],
     "extraResources": [
@@ -92,7 +103,11 @@
     ],
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Kronos-Setup.${ext}"
+    },
+    "dmg": {
+      "artifactName": "Kronos-mac.${ext}"
     }
   }
 }
