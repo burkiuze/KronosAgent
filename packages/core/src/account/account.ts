@@ -25,7 +25,15 @@ const log = logger('account');
 
 export const CLOUD_PROVIDER = 'cloud';
 export const CLOUD_TOKEN_ENV = 'KRONOS_CLOUD_TOKEN';
-export const DEFAULT_CLOUD_URL = 'https://heynavio.com';
+export const DEFAULT_CLOUD_URL = 'https://www.heynavio.com';
+
+/**
+ * heynavio.com answers on www and redirects the bare domain there. A redirect to another host
+ * drops the Authorization header, so app requests would arrive signed out: always talk to www.
+ */
+function canonicalCloudUrl(url: string): string {
+  return url.replace(/\/+$/, '').replace(/^https:\/\/heynavio\.com(?=\/|$)/i, 'https://www.heynavio.com');
+}
 
 export interface CloudModel {
   id: string;
@@ -124,7 +132,7 @@ export class AccountService {
   }
 
   cloudUrl(): string {
-    return (process.env.KRONOS_CLOUD_URL || this.k.config.cloud?.url || DEFAULT_CLOUD_URL).replace(/\/+$/, '');
+    return canonicalCloudUrl(process.env.KRONOS_CLOUD_URL || this.k.config.cloud?.url || DEFAULT_CLOUD_URL);
   }
 
   /** Base URL of the OpenAI-compatible Kronos Cloud API. */

@@ -72,6 +72,16 @@ describe('Kronos account and Kronos Cloud', () => {
     delete process.env.KRONOS_CLOUD_TOKEN;
   });
 
+  it('talks to www.heynavio.com, where a redirect cannot strip the app token', () => {
+    delete process.env.KRONOS_CLOUD_URL;
+    expect(env.rt.account.cloudUrl()).toBe('https://www.heynavio.com');
+    process.env.KRONOS_CLOUD_URL = 'https://heynavio.com/';
+    expect(env.rt.account.cloudUrl()).toBe('https://www.heynavio.com');
+    expect(env.rt.account.apiBase()).toBe('https://www.heynavio.com/api/kronos/v1');
+    process.env.KRONOS_CLOUD_URL = 'https://heynavio.com.example.org';
+    expect(env.rt.account.cloudUrl()).toBe('https://heynavio.com.example.org');
+  });
+
   it('starts on the first-run screen, and remembers "continue without an account"', () => {
     const s = env.rt.account.status();
     expect(s).toMatchObject({ signedIn: false, skipped: false, onboarded: false });

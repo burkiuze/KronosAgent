@@ -42,7 +42,7 @@ export const PROVIDERS: ProviderPreset[] = [
   { id: 'ollama', label: 'Ollama (local)', api: 'openai', baseUrl: 'http://127.0.0.1:11434', envKeys: [], keyRequired: false, local: true, defaultModel: 'qwen3-coder:30b' },
   { id: 'lmstudio', label: 'LM Studio (local)', api: 'openai', baseUrl: 'http://127.0.0.1:1234', envKeys: [], keyRequired: false, local: true, defaultModel: 'local-model' },
   // Kronos Cloud: models served for members, signed in with a Kronos account instead of an API key
-  { id: 'cloud', label: 'Kronos Cloud', api: 'openai', baseUrl: 'https://heynavio.com/api/kronos/v1', envKeys: ['KRONOS_CLOUD_TOKEN'], keyRequired: true, docsUrl: 'https://heynavio.com/kronosagent', defaultModel: 'glm-5.3-flash' },
+  { id: 'cloud', label: 'Kronos Cloud', api: 'openai', baseUrl: 'https://www.heynavio.com/api/kronos/v1', envKeys: ['KRONOS_CLOUD_TOKEN'], keyRequired: true, docsUrl: 'https://www.heynavio.com/kronosagent', defaultModel: 'glm-5.3-flash' },
   { id: 'kronos', label: 'Kronos Demo (offline)', api: 'demo', baseUrl: '', envKeys: [], keyRequired: false, local: true, defaultModel: 'demo' },
 ];
 

@@ -14,7 +14,7 @@ account**. The choice is remembered. You can sign in later from Settings → Mem
 
 Sign-in happens on heynavio.com in your browser:
 
-1. Kronos opens `https://heynavio.com/kronosagent/connect` with a one-time state and a PKCE code
+1. Kronos opens `https://www.heynavio.com/kronosagent/connect` with a one-time state and a PKCE code
    challenge.
 2. You sign in (or create an account) and choose **Connect**.
 3. The browser returns to Kronos (`/api/account/callback` on the gateway, or a temporary listener
@@ -70,4 +70,4 @@ kronos logout
 
 | Key | |
 |---|---|
-| `cloud.url` | another Kronos Cloud deployment (default `https://heynavio.com`; env `KRONOS_CLOUD_URL`) |
+| `cloud.url` | another Kronos Cloud deployment (default `https://www.heynavio.com`, and a bare `https://heynavio.com` is read as www; env `KRONOS_CLOUD_URL`) |
