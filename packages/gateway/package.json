@@ -17,7 +17,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@kronos/core": "1.0.0",
+    "@kronos/core": "*",
     "ws": "^8.22.0"
   },
   "devDependencies": {

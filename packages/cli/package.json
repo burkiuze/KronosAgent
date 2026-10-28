@@ -14,8 +14,8 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@kronos/core": "1.0.0",
-    "@kronos/gateway": "1.0.0",
+    "@kronos/core": "*",
+    "@kronos/gateway": "*",
     "yaml": "^2.9.1"
   }
 }
