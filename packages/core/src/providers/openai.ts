@@ -129,7 +129,7 @@ export class OpenAICompatProvider implements Provider {
         this.id,
         res.status,
         // a used-up plan allowance or a missing membership does not clear up by retrying
-        isRetryableStatus(res.status) && code !== 'usage_limit' && code !== 'membership_required',
+        isRetryableStatus(res.status) && code !== 'usage_limit' && code !== 'membership_required' && code !== 'capacity',
         parseRetryAfter(res.headers.get('retry-after')),
       );
     }

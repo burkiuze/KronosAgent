@@ -1,6 +1,6 @@
 {
   "name": "@kronos/gateway",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Kronos Agent gateway: REST + WebSocket server, desktop/web backend, OpenAI-compatible API and messaging platform adapters.",
   "license": "Apache-2.0",
   "type": "module",

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Crown, ExternalLink, Lock, LogOut, RefreshCw, Ticket } from 'lucide-react';
 import { cancelSignIn, fmtReset, loadAccount, redeemCode, signOut, skipAccount, startSignIn, useAccount, type UsageWindow } from '../lib/account';
-import { toast } from '../lib/store';
+import { setState, toast } from '../lib/store';
 import { KronosMark } from './Logo';
 
 function errText(e: unknown): string {
@@ -69,13 +69,47 @@ function Meter({ label, w }: { label: string; w: UsageWindow }) {
     <div className="usage-meter">
       <div className="usage-meter-head">
         <span>{label}</span>
-        <span className="muted">{w.percent}% used</span>
+        <span className={w.percent >= 90 ? 'usage-left hot' : 'usage-left'}>{Math.max(0, Math.round(100 - w.percent))}% left</span>
       </div>
       <div className="usage-bar">
-        <div className={w.percent >= 90 ? 'hot' : ''} style={{ width: `${Math.max(w.percent, w.percent > 0 ? 2 : 0)}%` }} />
+        <div className={w.percent >= 90 ? 'hot' : ''} style={{ width: `${Math.max(0, 100 - w.percent)}%` }} />
       </div>
-      <div className="set-desc">{fmtReset(w.resetsAt)}</div>
+      <div className="set-desc">
+        {w.percent}% used · {fmtReset(w.resetsAt)}
+      </div>
     </div>
+  );
+}
+
+/**
+ * Sidebar chip for members: what is left of the tighter of the two Kronos Cloud windows, so a
+ * long session does not run into the limit unannounced. Refreshes every minute while shown.
+ */
+export function CloudUsageChip() {
+  const { status } = useAccount();
+  const a = status?.signedIn ? status.account : null;
+  useEffect(() => {
+    if (!a?.plan) return;
+    const timer = setInterval(() => void loadAccount(true), 60_000);
+    return () => clearInterval(timer);
+  }, [a?.plan]);
+  if (!a?.plan) return null;
+  const tight = a.usage.fiveHour.percent >= a.usage.week.percent ? { w: a.usage.fiveHour, label: '5-hour' } : { w: a.usage.week, label: 'weekly' };
+  const left = Math.max(0, Math.round(100 - tight.w.percent));
+  return (
+    <button
+      className={`cloud-usage ${left <= 10 ? 'hot' : ''}`}
+      onClick={() => setState({ settings: 'membership' })}
+      title={`Kronos Cloud ${a.plan.name}: ${left}% of your ${tight.label} allowance left. ${fmtReset(tight.w.resetsAt)}`}
+    >
+      <span className="cloud-usage-head">
+        <span>{a.plan.name}</span>
+        <span>{left}% left</span>
+      </span>
+      <span className="usage-bar">
+        <span style={{ width: `${left}%` }} />
+      </span>
+    </button>
   );
 }
 

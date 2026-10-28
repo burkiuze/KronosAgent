@@ -1,6 +1,6 @@
 {
   "name": "kronos-agent",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "KRONOS AGENT \u2014 terminal interface for the Kronos autonomous agent.",
   "license": "Apache-2.0",
   "type": "module",

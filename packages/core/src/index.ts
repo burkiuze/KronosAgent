@@ -56,7 +56,7 @@ export { estimateTokens, estimateMessagesTokens, truncate, truncateMiddle, redac
 export { newId, sleep, formatDuration, formatTokens, formatCost, deepMerge, getPath, setPath, coerceValue, errorMessage, Emitter, slugify } from './util/misc.js';
 export { configureLogger, logger } from './util/log.js';
 
-export const KRONOS_VERSION = '1.0.1';
+export const KRONOS_VERSION = '1.0.2';
 export * from './review/index.js';
 export { SessionRecaps, recapTranscript } from './memory/recaps.js';
 export { parseStructured } from './runtime.js';

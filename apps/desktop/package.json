@@ -1,7 +1,7 @@
 {
   "name": "@kronos/desktop",
   "productName": "Kronos",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "KRONOS Desktop — native shell for Kronos Agent.",
   "license": "Apache-2.0",

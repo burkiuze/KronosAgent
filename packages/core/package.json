@@ -1,6 +1,6 @@
 {
   "name": "@kronos/core",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Kronos Agent core runtime: agent loop, providers, tools, memory, skills, sessions, cron, MCP.",
   "license": "Apache-2.0",
   "type": "module",

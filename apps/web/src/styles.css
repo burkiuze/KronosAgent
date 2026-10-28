@@ -4572,6 +4572,64 @@ button.sb-item:hover,
   background: var(--danger);
 }
 
+.usage-left {
+  font-weight: 600;
+}
+
+.usage-left.hot {
+  color: var(--danger);
+}
+
+/* sidebar: what is left of the member's Kronos Cloud allowance */
+.cloud-usage {
+  display: grid;
+  gap: 6px;
+  margin: 0 12px 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cloud-usage:hover {
+  background: var(--hover);
+}
+
+.cloud-usage-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8em;
+}
+
+.cloud-usage-head span:last-child {
+  color: var(--dim);
+}
+
+.cloud-usage .usage-bar {
+  display: block;
+  height: 4px;
+  margin: 0;
+}
+
+.cloud-usage .usage-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.cloud-usage.hot .usage-bar > span {
+  background: var(--danger);
+}
+
+.cloud-usage.hot .cloud-usage-head span:last-child {
+  color: var(--danger);
+}
+
 .plan-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

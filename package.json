@@ -1,6 +1,6 @@
 {
   "name": "kronos-agent-monorepo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "KRONOS AGENT — the self-improving, everywhere, every-model autonomous agent: CLI, desktop app, web UI, messaging gateway, skills, memory, cron, MCP and multi-agent orchestration.",
   "license": "Apache-2.0",

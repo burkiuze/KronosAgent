@@ -32,6 +32,7 @@ import { t } from '../lib/i18n';
 import type { Session } from '../lib/types';
 import { Menu, MenuItem } from './ui';
 import { ProfilesMenu } from './Profiles';
+import { CloudUsageChip } from './Account';
 
 const NAV: { id: View; icon: typeof Puzzle; key: string }[] = [
   { id: 'skills', icon: Puzzle, key: 'nav.skills' },
@@ -295,6 +296,7 @@ export function Sidebar() {
           </button>
         )}
       </div>
+      <CloudUsageChip />
       <div className="sidebar-foot">
         <ProfilesMenu
           up
