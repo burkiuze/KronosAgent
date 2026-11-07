@@ -45,8 +45,12 @@ function describeConnectionError(e: unknown): string {
   return (err.message ?? String(e)).slice(0, 300);
 }
 
-/** Auto-selection order when model.default is "auto". */
-const AUTO_ORDER = ['anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras', 'cloud'];
+/**
+ * Auto-selection order when model.default is "auto". opencode (Zen free models, always connected)
+ * comes first so a fresh install works with no provider sign-in; a user who adds their own key can
+ * still pick that provider's models explicitly.
+ */
+const AUTO_ORDER = ['opencode', 'anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras', 'cloud'];
 
 /** How the registry sees the Kronos account (set by the runtime). */
 export interface CloudAccess {
@@ -289,6 +293,20 @@ export class ProviderRegistry {
       info.vision = base.vision;
     }
     return info;
+  }
+
+  /**
+   * Merge extra model ids into a provider's live model list (deduped by ref), so they show up in
+   * `listModels()` and the pickers. Used to reflect models opencode declares in its own config.
+   */
+  registerModels(providerId: string, ids: string[]): void {
+    if (!ids.length) return;
+    const merged = [...(this.liveModels.get(providerId) ?? [])];
+    for (const id of ids) {
+      const ref = `${providerId}:${id}`;
+      if (!merged.some((m) => m.ref === ref)) merged.push(genericModel(providerId, id));
+    }
+    this.liveModels.set(providerId, merged);
   }
 
   async listModels(providerId?: string): Promise<ModelInfo[]> {

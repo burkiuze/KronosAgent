@@ -236,6 +236,19 @@ export interface KronosConfig {
     density: 'comfortable' | 'compact';
   };
   updates: { channel: 'stable' | 'beta'; autoCheck: boolean };
+  /**
+   * Embedded opencode engine. Kronos bundles the open-source opencode CLI and its Zen model
+   * gateway so the apps work with no provider sign-in. opencode is installed and run in the
+   * background; the UI only ever shows Kronos branding and the Zen free models.
+   */
+  opencode: {
+    enabled: boolean;
+    /** download + install the opencode binary when it is not already present */
+    autoInstall: boolean;
+    /** also run `opencode serve` in the background */
+    serve: boolean;
+    port: number;
+  };
   telemetry: { enabled: boolean };
   /** Kronos account and Kronos Cloud (heynavio.com); empty url = the official service */
   cloud: { url: string };
@@ -331,6 +344,7 @@ export function defaultConfig(): KronosConfig {
       nous: { apiKey: '${NOUS_API_KEY}' },
       moonshot: { apiKey: '${MOONSHOT_API_KEY}' },
       zai: { apiKey: '${ZAI_API_KEY}' },
+      opencode: { baseUrl: '${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1}', apiKey: '${OPENCODE_API_KEY}' },
       ollama: { baseUrl: '${OLLAMA_HOST:-http://127.0.0.1:11434}' },
       lmstudio: { baseUrl: '${LMSTUDIO_HOST:-http://127.0.0.1:1234}' },
     },
@@ -410,6 +424,7 @@ export function defaultConfig(): KronosConfig {
       density: 'comfortable',
     },
     updates: { channel: 'stable', autoCheck: true },
+    opencode: { enabled: true, autoInstall: false, serve: false, port: 4096 },
     telemetry: { enabled: false },
     cloud: { url: '' },
     github: {

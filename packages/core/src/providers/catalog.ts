@@ -39,6 +39,10 @@ export const PROVIDERS: ProviderPreset[] = [
   { id: 'cerebras', label: 'Cerebras', api: 'openai', baseUrl: 'https://api.cerebras.ai/v1', envKeys: ['CEREBRAS_API_KEY'], keyRequired: true, defaultModel: 'qwen-3-coder-480b' },
   { id: 'moonshot', label: 'Moonshot (Kimi)', api: 'openai', baseUrl: 'https://api.moonshot.ai/v1', envKeys: ['MOONSHOT_API_KEY'], keyRequired: true, defaultModel: 'kimi-k2-0905-preview' },
   { id: 'zai', label: 'Z.ai (GLM)', api: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', envKeys: ['ZAI_API_KEY'], keyRequired: true, defaultModel: 'glm-4.6' },
+  // opencode Zen: the free, no-sign-in model gateway served through the bundled opencode engine.
+  // keyRequired:false so it is always "connected" — the Kronos apps never show a provider screen;
+  // a Zen credential, when opencode has one on disk, is picked up from OPENCODE_API_KEY.
+  { id: 'opencode', label: 'Kronos Free (opencode Zen)', api: 'openai', baseUrl: 'https://opencode.ai/zen/v1', envKeys: ['OPENCODE_API_KEY'], keyRequired: false, docsUrl: 'https://opencode.ai/docs/zen', defaultModel: 'grok-code' },
   { id: 'ollama', label: 'Ollama (local)', api: 'openai', baseUrl: 'http://127.0.0.1:11434', envKeys: [], keyRequired: false, local: true, defaultModel: 'qwen3-coder:30b' },
   { id: 'lmstudio', label: 'LM Studio (local)', api: 'openai', baseUrl: 'http://127.0.0.1:1234', envKeys: [], keyRequired: false, local: true, defaultModel: 'local-model' },
   // Kronos Cloud: models served for members, signed in with a Kronos account instead of an API key
@@ -113,6 +117,16 @@ const OTHERS: Record<string, M[]> = {
     { id: 'qwen3-coder:30b', name: 'Qwen3 Coder 30B (local)', contextWindow: 65_536, maxOutput: 16_384, tools: true },
     { id: 'gpt-oss:20b', name: 'gpt-oss 20B (local)', contextWindow: 131_072, maxOutput: 16_384, tools: true },
     { id: 'llama3.3', name: 'Llama 3.3 (local)', contextWindow: 131_072, maxOutput: 8_192, tools: true },
+  ],
+  // opencode Zen free models. The live list is fetched from the Zen endpoint at runtime
+  // (listModels -> /models), so these are only seeds for the picker + context/pricing hints;
+  // the exact free line-up changes, and the default id can be overridden with OPENCODE_MODEL.
+  opencode: [
+    { id: 'grok-code', name: 'Grok Code (free)', contextWindow: 256_000, maxOutput: 64_000, tools: true, reasoning: 'none', description: 'Fast coding model, free via opencode Zen.', tags: ['recommended'] },
+    { id: 'code-supernova', name: 'Code Supernova (free)', contextWindow: 200_000, maxOutput: 64_000, tools: true, vision: true, description: 'Agentic coding model, free via opencode Zen.' },
+    { id: 'big-pickle', name: 'Big Pickle (free)', contextWindow: 131_072, maxOutput: 32_768, tools: true, description: 'General-purpose model, free via opencode Zen.' },
+    { id: 'kimi-k2', name: 'Kimi K2 (free)', contextWindow: 131_072, maxOutput: 32_768, tools: true, description: 'Open-weights model, free via opencode Zen.' },
+    { id: 'qwen3-coder', name: 'Qwen3 Coder (free)', contextWindow: 262_144, maxOutput: 65_536, tools: true, description: 'Coding model, free via opencode Zen.' },
   ],
   cloud: DEFAULT_CLOUD_MODELS.map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, maxOutput: m.maxOutput, vision: m.vision, tools: true, description: `${m.description ?? ''} Served by ${m.provider}.`.trim() })),
   kronos: [

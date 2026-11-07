@@ -36,6 +36,7 @@ import { HookRunner } from './agent/hooks.js';
 import { CronScheduler, type CronJob } from './cron/scheduler.js';
 import { McpManager } from './mcp/manager.js';
 import { createBackend, ProcessManager, type ExecBackend } from './backends/terminal.js';
+import { OpencodeManager } from './backends/opencode.js';
 import { detectSandbox, ensureNetworkProxy, proxiedNetwork } from './backends/sandbox.js';
 import { Agent, type AgentOptions } from './agent/agent.js';
 import { loadAgentDefinitions, type AgentDefinition } from './agent/definitions.js';
@@ -132,6 +133,9 @@ export class Kronos {
   cron!: CronScheduler;
   mcp!: McpManager;
   backend!: ExecBackend;
+  /** embedded opencode engine (bundled Zen free models); present when opencode.enabled */
+  opencode?: OpencodeManager;
+  private opencodeUnwatch?: () => void;
   github!: GitHubService;
   account!: AccountService;
   review!: ReviewEngine;
@@ -186,7 +190,41 @@ export class Kronos {
     if (opts.connectMcp !== false && Object.keys(k.config.mcp.servers).length) await k.mcp.connectAll(k.config.mcp.servers);
     if (opts.startCron && k.config.cron.enabled) k.cron.start();
     if (opts.startCron) k.recaps.schedule(60_000);
+    if (k.config.opencode?.enabled) {
+      k.opencode = new OpencodeManager({
+        home: k.paths.root,
+        serve: k.config.opencode.serve,
+        port: k.config.opencode.port,
+        autoInstall: k.config.opencode.autoInstall,
+      });
+      // Authenticate the Zen provider right away from any credential already on disk (cheap, no
+      // network) so the first message works on every surface.
+      k.opencode.discoverToken();
+      // Only a host that opts into installing or serving (the desktop app) runs the background
+      // engine and the live model sync — CLI/gateway/tests stay offline and side-effect free.
+      if (k.config.opencode.autoInstall || k.config.opencode.serve) {
+        void k.opencode
+          .start()
+          .then(() => k.syncOpencodeModels())
+          .catch((e) => log.warn('opencode engine startup failed', e));
+        // Reflect models added/changed in opencode back into the Kronos pickers automatically.
+        k.opencodeUnwatch = k.opencode.watchConfig(() => void k.syncOpencodeModels());
+      }
+    }
     return k;
+  }
+
+  /** Pull opencode's current models (live Zen catalog + its own config) into the provider registry. */
+  async syncOpencodeModels(): Promise<void> {
+    if (!this.opencode) return;
+    try {
+      await this.providers.listModels('opencode').catch(() => undefined);
+      const { models } = this.opencode.configuredModels();
+      if (models.length) this.providers.registerModels('opencode', models);
+      this.events.emit({ type: 'config_changed' });
+    } catch (e) {
+      log.debug('opencode model sync failed', e);
+    }
   }
 
   /** Launch-time overrides (flags, embedding apps, tests) survive every reload. */
@@ -697,6 +735,8 @@ export class Kronos {
     for (const a of this.agents.values()) a.interrupt();
     await Promise.race([Promise.allSettled([...this.background]), new Promise((r) => setTimeout(r, 5000))]);
     this.processes.killAll();
+    this.opencodeUnwatch?.();
+    await this.opencode?.stop();
     await this.browser.close();
     await this.mcp.closeAll();
     await this.backend.dispose?.();

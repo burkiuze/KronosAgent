@@ -77,7 +77,9 @@ async function probe(url: string, token: string): Promise<boolean> {
 }
 
 async function startBackend(): Promise<Backend> {
-  const runtime = await Kronos.create({ startCron: false, logLevel: 'warn' });
+  // Run the bundled opencode engine in the background on the desktop (installed silently on first
+  // launch; the Zen free models power the app with no provider sign-in).
+  const runtime = await Kronos.create({ startCron: false, logLevel: 'warn', overrides: { opencode: { autoInstall: true, serve: true } } });
   const cfg = runtime.config.gateway;
   const port = Number(process.env.KRONOS_PORT ?? cfg.port ?? 7777);
 
@@ -398,6 +400,7 @@ function buildMenu(): void {
         { label: 'Report an Issue', click: () => void shell.openExternal('https://github.com/burkiuze/KronosAgent/issues') },
         { label: 'Open Kronos Home Folder', click: () => backend?.runtime && void shell.openPath(backend.runtime.paths.root) },
         { label: 'Check for Updates…', click: () => void checkForUpdates(true) },
+        { label: 'Check for Engine Updates…', click: () => void checkEngineUpdate(true) },
       ],
     },
   ];
@@ -423,6 +426,40 @@ async function checkForUpdates(interactive = false): Promise<void> {
     if (interactive && !r?.isUpdateAvailable) void dialog.showMessageBox({ message: 'Kronos is up to date.', detail: `Version ${KRONOS_VERSION}` });
   } catch (e) {
     if (interactive) void dialog.showMessageBox({ type: 'warning', message: 'Update check failed', detail: (e as Error).message });
+  }
+}
+
+// The bundled engine (opencode) never updates itself silently — when a new version is available we
+// ask the user first. It is surfaced as the "Kronos engine"; opencode stays an implementation detail.
+async function checkEngineUpdate(interactive = false): Promise<void> {
+  const engine = backend?.runtime?.opencode;
+  if (!engine) {
+    if (interactive) void dialog.showMessageBox({ message: 'The Kronos engine runs on the main gateway for this profile.' });
+    return;
+  }
+  try {
+    const { current, latest, updateAvailable } = await engine.checkForUpdate();
+    if (!updateAvailable) {
+      if (interactive) void dialog.showMessageBox({ message: 'The Kronos engine is up to date.', detail: current ? `Version ${current}` : undefined });
+      return;
+    }
+    const r = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['Update now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      message: 'A Kronos engine update is available',
+      detail: `${current ?? 'current'} → ${latest ?? 'latest'}.\n\nUpdate the engine now?`,
+    });
+    if (r.response !== 0) return;
+    const res = await engine.update();
+    new Notification({
+      title: res.ok ? 'Kronos engine updated' : 'Engine update failed',
+      body: res.ok ? `The engine is now on ${res.version ?? 'the latest version'}.` : 'The update could not be applied; see logs for details.',
+      icon: appIcon(128),
+    }).show();
+  } catch (e) {
+    if (interactive) void dialog.showMessageBox({ type: 'warning', message: 'Engine update check failed', detail: (e as Error).message });
   }
 }
 
@@ -517,6 +554,8 @@ if (!app.requestSingleInstanceLock()) {
     const link = process.argv.find((a) => a.startsWith('kronos://'));
     if (link) handleDeepLink(link);
     if (backend.runtime?.config.updates.autoCheck !== false) setTimeout(() => void checkForUpdates(false), 10_000);
+    // Give the background engine time to install on first launch before checking for its updates.
+    if (backend.runtime?.config.updates.autoCheck !== false) setTimeout(() => void checkEngineUpdate(false), 30_000);
   });
 
   app.on('activate', () => {

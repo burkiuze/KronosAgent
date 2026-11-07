@@ -34,6 +34,7 @@ export { McpClient } from './mcp/client.js';
 export { McpManager, type McpServerStatus } from './mcp/manager.js';
 export { serveMcp } from './mcp/server.js';
 export { createBackend, ProcessManager, type ExecBackend } from './backends/terminal.js';
+export { OpencodeManager, type OpencodeOptions, type OpencodeStatus } from './backends/opencode.js';
 export { PermissionPolicy, ruleMatches } from './safety/permissions.js';
 export { detectDangerous, isReadOnlyCommand } from './safety/dangerous.js';
 export { reviewAction, parseVerdict, guardianTranscript, stripShellComments, type GuardianVerdict } from './safety/guardian.js';
