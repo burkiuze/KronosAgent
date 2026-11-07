@@ -218,9 +218,9 @@ export class Kronos {
   async syncOpencodeModels(): Promise<void> {
     if (!this.opencode) return;
     try {
-      await this.providers.listModels('opencode').catch(() => undefined);
+      await this.providers.listModels('free').catch(() => undefined);
       const { models } = this.opencode.configuredModels();
-      if (models.length) this.providers.registerModels('opencode', models);
+      if (models.length) this.providers.registerModels('free', models);
       this.events.emit({ type: 'config_changed' });
     } catch (e) {
       log.debug('opencode model sync failed', e);

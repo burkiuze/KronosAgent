@@ -32,7 +32,9 @@ export function ModelPicker({ children, compact, down }: { children: ReactNode; 
     if (!open) return;
     void Promise.all([get<{ models: ModelInfo[] }>('/api/models'), get<ProviderStatus[]>('/api/providers')]).then(([m, p]) => {
       setModels(m.models);
-      setProviders([...p, { id: 'cloud', label: 'Kronos Cloud', configured: true, local: false }]);
+      // 'free' and 'cloud' aren't in /api/providers (they need no setup); add them so their model
+      // groups get a proper heading + logo in the picker.
+      setProviders([...p, { id: 'free', label: 'Free models', configured: true, local: false }, { id: 'cloud', label: 'Kronos Cloud', configured: true, local: false }]);
     });
   }, [open]);
 

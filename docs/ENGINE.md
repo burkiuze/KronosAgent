@@ -1,4 +1,4 @@
-# Embedded opencode engine
+# Built-in engine (internal)
 
 Kronos bundles the open-source [opencode](https://opencode.ai) CLI as a background engine so the
 apps work **with no provider sign-in**: on first launch the desktop app installs opencode silently,

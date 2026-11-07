@@ -46,11 +46,11 @@ function describeConnectionError(e: unknown): string {
 }
 
 /**
- * Auto-selection order when model.default is "auto". opencode (Zen free models, always connected)
- * comes first so a fresh install works with no provider sign-in; a user who adds their own key can
+ * Auto-selection order when model.default is "auto". The built-in free models (always connected)
+ * come first so a fresh install works with no provider sign-in; a user who adds their own key can
  * still pick that provider's models explicitly.
  */
-const AUTO_ORDER = ['opencode', 'anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras', 'cloud'];
+const AUTO_ORDER = ['free', 'anthropic', 'openai', 'openrouter', 'gemini', 'nous', 'nvidia', 'xai', 'deepseek', 'mistral', 'groq', 'moonshot', 'zai', 'together', 'fireworks', 'cerebras', 'cloud'];
 
 /** How the registry sees the Kronos account (set by the runtime). */
 export interface CloudAccess {

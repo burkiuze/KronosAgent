@@ -151,7 +151,8 @@ export function buildApi(gw: Gateway): Router {
   });
 
   // ---------------------------------------------------------------- models
-  r.get('/api/providers', () => rt().providers.statuses().filter((p) => p.id !== 'cloud'));
+  // 'free' (built-in models) and 'cloud' need no user setup, so they are not listed in the keys UI.
+  r.get('/api/providers', () => rt().providers.statuses().filter((p) => p.id !== 'cloud' && p.id !== 'free'));
   r.post('/api/providers/:id/test', async (req) => {
     const b = await req.body<{ apiKey?: string }>().catch(() => ({}) as { apiKey?: string });
     return rt().providers.testConnection(req.params.id as string, { apiKey: b.apiKey?.trim() || undefined });

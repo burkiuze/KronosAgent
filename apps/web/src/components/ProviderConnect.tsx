@@ -34,12 +34,12 @@ interface ConnectionTest {
 }
 
 /** Popular first; the rest keep the catalog order. */
-const ORDER = ['opencode', 'anthropic', 'openai', 'gemini', 'openrouter', 'deepseek', 'xai', 'mistral', 'groq', 'ollama', 'lmstudio'];
+const ORDER = ['anthropic', 'openai', 'gemini', 'openrouter', 'deepseek', 'xai', 'mistral', 'groq', 'ollama', 'lmstudio'];
 
 export function ProviderLogo({ id, label, size = 30 }: { id: string; label: string; size?: number }) {
   const svg = PROVIDER_LOGOS[id];
-  // The bundled free provider is Kronos-branded; opencode stays an implementation detail.
-  if (id === 'cloud' || id === 'opencode') {
+  // The built-in free models carry the Kronos mark.
+  if (id === 'cloud' || id === 'free') {
     return (
       <span className="pv-badge" style={{ width: size, height: size }} title={label}>
         <img src={`${import.meta.env.BASE_URL}kronos-128.png`} width={size - 4} height={size - 4} alt="" style={{ borderRadius: 4 }} />
