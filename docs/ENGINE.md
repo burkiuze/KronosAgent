@@ -12,7 +12,7 @@ opencode.
 ## How it works
 
 - **Provider.** A provider `opencode` (shown as *Kronos Free*) is an OpenAI-compatible client of the
-  Zen endpoint (`https://opencode.ai/zen/v1`). It is `keyRequired: false`, so it is always
+  Zen endpoint (`https://opencode.ai/inference/openai/v1`). It is `keyRequired: false`, so it is always
   "connected" and the apps never show a provider screen. It is first in the auto-selection order, so
   a fresh install resolves `model.default: auto` to a free Zen model.
 - **Engine manager** (`packages/core/src/backends/opencode.ts`, `OpencodeManager`):

@@ -344,7 +344,7 @@ export function defaultConfig(): KronosConfig {
       nous: { apiKey: '${NOUS_API_KEY}' },
       moonshot: { apiKey: '${MOONSHOT_API_KEY}' },
       zai: { apiKey: '${ZAI_API_KEY}' },
-      free: { baseUrl: '${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1}', apiKey: '${OPENCODE_API_KEY}' },
+      free: { baseUrl: '${OPENCODE_BASE_URL:-https://opencode.ai/inference/openai/v1}', apiKey: '${OPENCODE_API_KEY}' },
       ollama: { baseUrl: '${OLLAMA_HOST:-http://127.0.0.1:11434}' },
       lmstudio: { baseUrl: '${LMSTUDIO_HOST:-http://127.0.0.1:1234}' },
     },

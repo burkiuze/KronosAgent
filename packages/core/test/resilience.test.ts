@@ -166,11 +166,23 @@ describe('eval trajectories', () => {
   });
 });
 
+describe('built-in free models', () => {
+  it('make a fresh install ready with no keys: auto resolves to a free model', async () => {
+    const t = await makeRuntime({ model: { default: 'auto' } });
+    try {
+      expect(t.rt.providers.readiness()).toEqual({ ok: true });
+      expect(t.rt.providers.resolve().ref).toBe('free:big-pickle');
+    } finally {
+      await t.cleanup();
+    }
+  });
+});
+
 describe('no demo fallback', () => {
-  // a fresh install: model "auto", no keys anywhere
+  // a fresh install with the built-in free models turned off: model "auto", no keys anywhere
   let fresh: TestEnv;
   beforeEach(async () => {
-    fresh = await makeRuntime({ model: { default: 'auto' } });
+    fresh = await makeRuntime({ model: { default: 'auto' }, providers: { free: { enabled: false } } });
   });
   afterEach(async () => {
     delete process.env.OPENAI_API_KEY;

@@ -42,7 +42,7 @@ export const PROVIDERS: ProviderPreset[] = [
   // Built-in free models (no sign-in), served through the embedded engine. keyRequired:false so it
   // is always "connected" and the apps never show a provider screen; the credential is supplied by
   // the engine at runtime (OPENCODE_API_KEY). Hidden from the provider/keys UI.
-  { id: 'free', label: 'Free models', api: 'openai', baseUrl: 'https://opencode.ai/zen/v1', envKeys: ['OPENCODE_API_KEY'], keyRequired: false, defaultModel: 'grok-code' },
+  { id: 'free', label: 'Free models', api: 'openai', baseUrl: 'https://opencode.ai/inference/openai/v1', envKeys: ['OPENCODE_API_KEY'], keyRequired: false, defaultModel: 'big-pickle' },
   { id: 'ollama', label: 'Ollama (local)', api: 'openai', baseUrl: 'http://127.0.0.1:11434', envKeys: [], keyRequired: false, local: true, defaultModel: 'qwen3-coder:30b' },
   { id: 'lmstudio', label: 'LM Studio (local)', api: 'openai', baseUrl: 'http://127.0.0.1:1234', envKeys: [], keyRequired: false, local: true, defaultModel: 'local-model' },
   // Kronos Cloud: models served for members, signed in with a Kronos account instead of an API key
@@ -118,15 +118,20 @@ const OTHERS: Record<string, M[]> = {
     { id: 'gpt-oss:20b', name: 'gpt-oss 20B (local)', contextWindow: 131_072, maxOutput: 16_384, tools: true },
     { id: 'llama3.3', name: 'Llama 3.3 (local)', contextWindow: 131_072, maxOutput: 8_192, tools: true },
   ],
-  // Built-in free models. The live list is fetched from the endpoint at runtime (listModels ->
-  // /models), so these are only seeds for the picker + context/pricing hints; the exact free
-  // line-up changes over time and the live list is authoritative.
+  // Built-in free models: the active free line-up of the engine's model service (from its public
+  // models.dev catalog, Nov 2026; chat-completions models only). The live list is fetched at runtime
+  // (listModels -> /models) and filtered to free models, so this is only the starting set + limits.
   free: [
-    { id: 'grok-code', name: 'Grok Code', contextWindow: 256_000, maxOutput: 64_000, tools: true, reasoning: 'none', description: 'Fast coding model. Free, no setup.', tags: ['recommended'] },
-    { id: 'code-supernova', name: 'Code Supernova', contextWindow: 200_000, maxOutput: 64_000, tools: true, vision: true, description: 'Agentic coding model. Free, no setup.' },
-    { id: 'big-pickle', name: 'Big Pickle', contextWindow: 131_072, maxOutput: 32_768, tools: true, description: 'General-purpose model. Free, no setup.' },
-    { id: 'kimi-k2', name: 'Kimi K2', contextWindow: 131_072, maxOutput: 32_768, tools: true, description: 'Open-weights model. Free, no setup.' },
-    { id: 'qwen3-coder', name: 'Qwen3 Coder', contextWindow: 262_144, maxOutput: 65_536, tools: true, description: 'Coding model. Free, no setup.' },
+    { id: 'big-pickle', name: 'Big Pickle', contextWindow: 200_000, maxOutput: 32_000, tools: true, reasoning: 'openai', description: 'Reasoning model for analysis, multi-step problem solving and tool use.', tags: ['recommended'] },
+    { id: 'deepseek-v4.1-flash-free', name: 'DeepSeek V4.1 Flash Free', contextWindow: 200_000, maxOutput: 32_000, tools: true, reasoning: 'openai', description: 'Fast DeepSeek reasoning model.' },
+    { id: 'glm-5.3-flash-free', name: 'GLM-5.3-Flash Free', contextWindow: 200_000, maxOutput: 32_000, tools: true, vision: true, reasoning: 'openai', description: 'Fast GLM model; reads images.' },
+    { id: 'mimo-v2.6-flash-free', name: 'MiMo-V2.6-Flash Free', contextWindow: 200_000, maxOutput: 32_000, tools: true, reasoning: 'openai', description: 'Fast MiMo reasoning model.' },
+    { id: 'iceman-free', name: 'Iceman Free', contextWindow: 262_144, maxOutput: 131_072, tools: true, reasoning: 'openai', description: 'Free for a limited time.' },
+    { id: 'nemotron-3.5-super-vl-free', name: 'Nemotron 3.5 Super VL Free', contextWindow: 128_000, maxOutput: 131_072, tools: true, vision: true, reasoning: 'openai', description: 'NVIDIA vision-language model.' },
+    { id: 'nemotron-3.5-lightning-free', name: 'Nemotron 3.5 Lightning Free', contextWindow: 128_000, maxOutput: 32_000, tools: true, reasoning: 'openai', description: 'Fast NVIDIA model.' },
+    { id: 'beam-free', name: 'Beam Free', contextWindow: 128_000, maxOutput: 32_000, tools: true, reasoning: 'openai' },
+    { id: 'flint-40b-free', name: 'Flint 40B Free', contextWindow: 128_000, maxOutput: 65_536, tools: true, reasoning: 'openai' },
+    { id: 'inkling-2-small-free', name: 'Inkling 2 Small Free', contextWindow: 128_000, maxOutput: 32_000, tools: true, reasoning: 'openai', description: 'Free for a limited time.' },
   ],
   cloud: DEFAULT_CLOUD_MODELS.map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, maxOutput: m.maxOutput, vision: m.vision, tools: true, description: `${m.description ?? ''} Served by ${m.provider}.`.trim() })),
   kronos: [

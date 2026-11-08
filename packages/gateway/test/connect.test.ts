@@ -7,18 +7,18 @@ import { Kronos } from '@kronos/core';
 import type { ChatResponse, Provider } from '@kronos/core';
 import { Gateway } from '@kronos/gateway';
 
-const KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY'];
+const KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENCODE_API_KEY'];
 
 let gw: Gateway;
 let rt: Kronos;
 let home: string;
 let sessionId: string;
 
-// a fresh install: model "auto", no keys anywhere
+// a fresh install with the built-in free models turned off: model "auto", no keys anywhere
 beforeAll(async () => {
   for (const k of KEYS) delete process.env[k];
   home = mkdtempSync(join(tmpdir(), 'kronos-connect-'));
-  rt = await Kronos.create({ home, cwd: home, connectMcp: false, logLevel: 'silent', overrides: { skills: { claudeCompat: false } } as never });
+  rt = await Kronos.create({ home, cwd: home, connectMcp: false, logLevel: 'silent', overrides: { skills: { claudeCompat: false }, providers: { free: { enabled: false } } } as never });
   gw = await Gateway.start(rt, { port: 0, host: '127.0.0.1', platforms: false, cron: false, token: 't' });
 });
 

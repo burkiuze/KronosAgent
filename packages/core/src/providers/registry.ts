@@ -323,7 +323,13 @@ export class ProviderRegistry {
       if (providerId && this.isConfigured(id)) {
         try {
           const p = this.get(id);
-          const live = (await p.listModels?.()) ?? [];
+          let live = (await p.listModels?.()) ?? [];
+          // the built-in service also lists paid models; the "free" provider shows only free ones
+          // (its free models carry a "-free" suffix, plus the seeded ones such as big-pickle)
+          if (id === 'free') {
+            const seeded = new Set(catalog.filter((m) => m.provider === 'free').map((m) => m.id));
+            live = live.filter((m) => seeded.has(m.id) || /-free$/i.test(m.id));
+          }
           this.liveModels.set(id, live);
           for (const m of live) if (!out.some((x) => x.ref === m.ref)) out.push(m);
         } catch (e) {
