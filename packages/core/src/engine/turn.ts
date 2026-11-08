@@ -143,6 +143,7 @@ export async function runEngineTurn(o: EngineTurnOptions): Promise<EngineTurnRes
   let aborted = false;
   let active = false;
   let lastText = '';
+  let lastRetry: number | undefined;
 
   let settled = false;
   let resolveFinished!: () => void;
@@ -324,6 +325,17 @@ export async function runEngineTurn(o: EngineTurnOptions): Promise<EngineTurnRes
         break;
       case 'session.status':
         if (p.status?.type === 'busy') active = true;
+        // the engine keeps retrying a failing model call with back-off: say so, or the turn looks stuck
+        if (p.status?.type === 'retry' && p.status.attempt !== lastRetry) {
+          lastRetry = p.status.attempt;
+          const wait = typeof p.status.next === 'number' ? Math.max(0, Math.round((p.status.next - Date.now()) / 1000)) : undefined;
+          emit({
+            type: 'notice',
+            runId,
+            level: 'warn',
+            text: `The model service could not be reached (${String(p.status.message ?? 'error').slice(0, 160)}). Retrying${wait !== undefined ? ` in ${wait}s` : ''} (attempt ${p.status.attempt}). Press Stop to cancel.`,
+          });
+        }
         break;
       case 'session.idle':
         if (active || error) finish();

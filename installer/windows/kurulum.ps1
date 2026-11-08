@@ -42,7 +42,7 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 try {
   # ------------------------------------------------------------------ 1. Node.js (>= 20.19)
-  Step '1/5  Node.js kontrol ediliyor'
+  Step '1/6  Node.js kontrol ediliyor'
   Add-PathIfExists "$env:ProgramW6432\nodejs"
   Add-PathIfExists "$env:ProgramFiles\nodejs"
   $needNode = $true
@@ -72,7 +72,7 @@ try {
   }
 
   # ------------------------------------------------------------------ 2. Git
-  Step '2/5  Git kontrol ediliyor'
+  Step '2/6  Git kontrol ediliyor'
   Add-PathIfExists "$env:ProgramW6432\Git\cmd"
   Add-PathIfExists "$env:ProgramFiles\Git\cmd"
   if (Has git) {
@@ -97,7 +97,7 @@ try {
   }
 
   # ------------------------------------------------------------------ 3. KronosAgent
-  Step '3/5  KronosAgent indiriliyor'
+  Step '3/6  KronosAgent indiriliyor'
   $app = Join-Path $InstallDir 'app'
   if (Test-Path (Join-Path $app '.git')) {
     Info 'Mevcut kurulum bulundu; en yeni surume guncelleniyor...'
@@ -112,15 +112,24 @@ try {
   # ------------------------------------------------------------------ 4. Bilesenler + derleme
   Push-Location $app
   try {
-    Step '4/5  Bilesenler yukleniyor (npm install) - birkac dakika surebilir'
+    Step '4/6  Bilesenler yukleniyor (npm install) - birkac dakika surebilir'
     Run 'npm' @('install', '--no-audit', '--no-fund', '--loglevel=error')
     Step '      Kronos derleniyor'
     Run 'npm' @('run', 'build')
     Run 'npm' @('run', 'build', '-w', '@kronos/desktop')
   } finally { Pop-Location }
 
+  # ------------------------------------------------------------------ 5. Kronos motoru
+  # The app runs its agent on the built-in engine; install it now (where the app looks for it,
+  # <user>\.kronos\opencode) so the first launch does not have to download it.
+  Step '5/6  Kronos motoru kuruluyor'
+  $engineDir = Join-Path $env:USERPROFILE '.kronos\opencode'
+  New-Item -ItemType Directory -Force -Path $engineDir | Out-Null
+  Run 'npm' @('install', '--prefix', $engineDir, '--no-audit', '--no-fund', '--loglevel=error', 'opencode-ai')
+  Info 'Motor hazir.'
+
   # ------------------------------------------------------------------ 5. Kisayollar
-  Step '5/5  Kisayollar olusturuluyor'
+  Step '6/6  Kisayollar olusturuluyor'
   $electron = @(
     (Join-Path $app 'node_modules\electron\dist\electron.exe'),
     (Join-Path $app 'apps\desktop\node_modules\electron\dist\electron.exe')

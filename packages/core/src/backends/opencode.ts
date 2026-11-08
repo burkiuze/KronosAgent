@@ -21,6 +21,7 @@ import { homedir, platform } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { createWriteStream } from 'node:fs';
 import { createServer } from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { which, runShell, runProcess } from '../util/process.js';
 import { logger } from '../util/log.js';
 
@@ -427,11 +428,15 @@ export class OpencodeManager {
     mkdirSync(this.configDir(), { recursive: true });
     const logFile = join(this.opts.home, 'opencode', 'logs', 'serve.log');
     const out = createWriteStream(logFile, { flags: 'a' });
+    // a per-launch password: without it any local program (or web page) could drive the engine
+    this.password = randomBytes(24).toString('base64url');
     const env = {
       ...process.env,
       PATH: `${join(this.installDir(), 'bin')}${delimiter}${process.env.PATH ?? ''}`,
       OPENCODE_CONFIG_DIR: this.configDir(),
       OPENCODE_DISABLE_AUTOUPDATE: '1',
+      OPENCODE_SERVER_USERNAME: 'kronos',
+      OPENCODE_SERVER_PASSWORD: this.password,
     };
     try {
       const child = spawn(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(this.port)], {
@@ -467,6 +472,12 @@ export class OpencodeManager {
   }
 
   private ready = false;
+  private password: string | undefined;
+
+  /** Authorization header for the running server (basic auth with the per-launch password). */
+  serverAuth(): string | undefined {
+    return this.password ? `Basic ${Buffer.from(`kronos:${this.password}`).toString('base64')}` : undefined;
+  }
 
   /** Poll the server's health endpoint until it answers (or the process exits / time runs out). */
   private async waitReady(timeoutMs: number): Promise<boolean> {
@@ -474,7 +485,8 @@ export class OpencodeManager {
     while (Date.now() < until) {
       if (!this.child || this.child.killed || this.child.exitCode !== null) return false;
       try {
-        const res = await fetch(`${this.serverUrl()}/global/health`, { signal: AbortSignal.timeout(1500) });
+        const auth = this.serverAuth();
+        const res = await fetch(`${this.serverUrl()}/global/health`, { signal: AbortSignal.timeout(1500), headers: auth ? { authorization: auth } : {} });
         if (res.ok) return true;
       } catch {
         /* not up yet */

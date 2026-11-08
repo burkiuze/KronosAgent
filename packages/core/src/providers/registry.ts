@@ -125,6 +125,8 @@ export class ProviderRegistry {
         ...(kronosId === 'free' && m.id === 'big-pickle' ? { tags: ['recommended'] } : {}),
       });
     }
+    // the recommended default leads its group in the pickers
+    infos.sort((a, b) => Number(Boolean(b.tags?.includes('recommended'))) - Number(Boolean(a.tags?.includes('recommended'))));
     for (const id of new Set([...this.engineProviders.keys(), ...providers.keys(), 'free'])) this.cache.delete(id);
     this.engineProviders = providers;
     this.engineModels = infos;

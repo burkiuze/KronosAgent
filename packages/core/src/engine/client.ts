@@ -59,10 +59,16 @@ export class EngineClient {
     readonly baseUrl: string,
     /** project directory the engine scopes sessions, tools and config to */
     readonly directory?: string,
+    /** Authorization header value for a password-protected server */
+    private readonly authorization?: string,
   ) {}
 
   withDirectory(directory: string): EngineClient {
-    return new EngineClient(this.baseUrl, directory);
+    return new EngineClient(this.baseUrl, directory, this.authorization);
+  }
+
+  private headers(extra: Record<string, string> = {}): Record<string, string> {
+    return this.authorization ? { ...extra, authorization: this.authorization } : extra;
   }
 
   private url(path: string): string {
@@ -76,7 +82,7 @@ export class EngineClient {
     try {
       res = await fetch(this.url(path.replace(/^\//, '')), {
         method,
-        headers: body === undefined ? {} : { 'content-type': 'application/json' },
+        headers: this.headers(body === undefined ? {} : { 'content-type': 'application/json' }),
         body: body === undefined ? undefined : JSON.stringify(body),
         signal,
       });
@@ -91,7 +97,7 @@ export class EngineClient {
 
   async healthy(timeoutMs = 2000): Promise<boolean> {
     try {
-      const res = await fetch(this.url('global/health'), { signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetch(this.url('global/health'), { signal: AbortSignal.timeout(timeoutMs), headers: this.headers() });
       return res.ok;
     } catch {
       return false;
@@ -195,7 +201,7 @@ export class EngineClient {
   async subscribe(onEvent: (e: EngineEvent) => void, signal: AbortSignal): Promise<{ closed: Promise<void> }> {
     let res: Response;
     try {
-      res = await fetch(this.url('event'), { signal, headers: { accept: 'text/event-stream' } });
+      res = await fetch(this.url('event'), { signal, headers: this.headers({ accept: 'text/event-stream' }) });
     } catch (e) {
       if ((e as Error).name === 'AbortError') throw e;
       throw new EngineError(`The Kronos engine is not reachable (${(e as Error).message}).`);

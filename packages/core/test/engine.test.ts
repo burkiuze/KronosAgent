@@ -19,6 +19,8 @@ function script(permissionReply: string): Record<string, unknown>[] {
     { type: 'message.updated', properties: { sessionID: SID, info: { id: 'msg_u1', sessionID: SID, role: 'user' } } },
     part({ id: 'prt_u', messageID: 'msg_u1', type: 'text', text: 'run it' }),
     { type: 'session.status', properties: { sessionID: SID, status: { type: 'busy' } } },
+    { type: 'session.status', properties: { sessionID: SID, status: { type: 'retry', attempt: 1, message: 'getaddrinfo ENOTFOUND', next: Date.now() + 2000 } } },
+    { type: 'session.status', properties: { sessionID: SID, status: { type: 'retry', attempt: 1, message: 'getaddrinfo ENOTFOUND', next: Date.now() + 2000 } } },
     { type: 'message.updated', properties: { sessionID: SID, info: { id: M1, sessionID: SID, role: 'assistant' } } },
     part({ id: 'prt_r', messageID: M1, type: 'reasoning', text: '' }),
     delta(M1, 'prt_r', 'Need a command. '),
@@ -157,6 +159,10 @@ describe('engine turn', () => {
     expect(res).toMatchObject({ id: 'call_1', content: 'hi\n', isError: false, durationMs: 50 });
     // the user message is not echoed back as assistant output
     expect(events.some((e) => e.type === 'text_delta' && (e as { text: string }).text.includes('run it'))).toBe(false);
+
+    // an engine retry is shown once per attempt, so a slow model call does not look stuck
+    const retries = events.filter((e) => e.type === 'notice' && /Retrying/.test((e as { text: string }).text));
+    expect(retries).toHaveLength(1);
 
     expect(asked).toHaveLength(1);
     expect(asked[0]).toMatchObject({ toolName: 'shell', risk: 'execute', toolCallId: 'call_1' });

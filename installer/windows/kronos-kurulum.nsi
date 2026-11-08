@@ -31,7 +31,7 @@ VIAddVersionKey /LANG=1055 "LegalCopyright" "Apache-2.0"
 !define MUI_ABORTWARNING
 
 !define MUI_WELCOMEPAGE_TITLE "Kronos Kurulumuna Hoş Geldin"
-!define MUI_WELCOMEPAGE_TEXT "Bu sihirbaz Kronos'u ve ihtiyaç duyduğu her şeyi kuracak:$\r$\n$\r$\n   •  Node.js  (bilgisayarında yoksa)$\r$\n   •  Git  (bilgisayarında yoksa)$\r$\n   •  KronosAgent uygulaması ve bileşenleri$\r$\n$\r$\nKurulum internetten indirme yapar ve bağlantına göre birkaç dakika sürebilir.$\r$\n$\r$\nKronos ücretsiz modellerle hazır gelir; hesap veya API anahtarı gerekmez.$\r$\n$\r$\nDevam etmek için İleri'ye tıkla."
+!define MUI_WELCOMEPAGE_TEXT "Bu sihirbaz Kronos'u ve ihtiyaç duyduğu her şeyi kuracak:$\r$\n$\r$\n   •  Node.js  (bilgisayarında yoksa)$\r$\n   •  Git  (bilgisayarında yoksa)$\r$\n   •  KronosAgent uygulaması ve bileşenleri$\r$\n   •  Kronos motoru$\r$\n$\r$\nKurulum internetten indirme yapar ve bağlantına göre birkaç dakika sürebilir.$\r$\n$\r$\nKronos ücretsiz modellerle hazır gelir; hesap veya API anahtarı gerekmez.$\r$\n$\r$\nDevam etmek için İleri'ye tıkla."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE.txt"
 !insertmacro MUI_PAGE_DIRECTORY

@@ -226,7 +226,7 @@ export class Kronos {
   /** Client for the embedded engine's server, while it is up. */
   engineClient(): EngineClient | undefined {
     const st = this.opencode?.status();
-    return st?.serving && st.serverUrl ? new EngineClient(st.serverUrl) : undefined;
+    return st?.serving && st.serverUrl ? new EngineClient(st.serverUrl, undefined, this.opencode?.serverAuth()) : undefined;
   }
 
   /** Pull the engine's current models into the provider registry (and refresh the pickers). */
