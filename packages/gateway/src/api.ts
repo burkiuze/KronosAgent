@@ -34,8 +34,9 @@ import type { Gateway } from './server.js';
 
 const SECRET_ENV_KEYS = [
   ...new Set([
-    // the Kronos Cloud token is managed by signing in (Settings → Membership), not pasted as a key
-    ...PROVIDERS.flatMap((p) => p.envKeys).filter((k) => k !== 'KRONOS_CLOUD_TOKEN'),
+    // the Kronos Cloud token is managed by signing in (Settings → Membership) and the built-in free
+    // models' credential by the engine itself — neither is pasted as a key, so neither is listed
+    ...PROVIDERS.flatMap((p) => p.envKeys).filter((k) => k !== 'KRONOS_CLOUD_TOKEN' && k !== 'OPENCODE_API_KEY'),
     'TAVILY_API_KEY', 'BRAVE_API_KEY', 'EXA_API_KEY', 'SERPER_API_KEY', 'JINA_API_KEY', 'SEARXNG_URL', 'FAL_KEY', 'REPLICATE_API_TOKEN',
     'ELEVENLABS_API_KEY', 'TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'MATRIX_ACCESS_TOKEN',
     'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN', 'KRONOS_GATEWAY_TOKEN', 'KRONOS_WEBHOOK_SECRET', 'HASS_TOKEN', 'GITHUB_TOKEN',

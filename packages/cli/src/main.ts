@@ -388,7 +388,7 @@ async function cmdModel(rt: Kronos, pos: string[]): Promise<void> {
   const current = rt.providers.resolve();
   console.log(`${c.bold('Default:')} ${current.name} ${c.gray(`(${current.ref})`)}\n`);
   const statuses = rt.providers.statuses();
-  console.log(table([[c.bold('Provider'), c.bold('Status'), c.bold('Key / URL')], ...statuses.map((p) => [p.label, p.configured ? c.green('ready') : c.gray('not configured'), c.gray(p.envKeys.join(' / ') || p.baseUrl)])]));
+  console.log(table([[c.bold('Provider'), c.bold('Status'), c.bold('Key / URL')], ...statuses.map((p) => [p.label, p.configured ? c.green('ready') : c.gray('not configured'), c.gray(p.id === 'free' ? 'built-in' : p.envKeys.join(' / ') || p.baseUrl)])]));
   if (sub === 'list') {
     console.log();
     const ready = new Set(statuses.filter((s) => s.configured).map((s) => s.id));
@@ -510,7 +510,8 @@ async function cmdKeys(rt: Kronos, pos: string[]): Promise<void> {
     console.log(`${c.green(sym.ok)} ${name} removed`);
     return;
   }
-  for (const p of rt.providers.statuses()) {
+  // the built-in free models' credential is managed by the engine, not set by the user
+  for (const p of rt.providers.statuses().filter((s) => s.id !== 'free')) {
     for (const k of p.envKeys) console.log(`  ${process.env[k] ? c.green('●') : c.gray('○')} ${k.padEnd(24)} ${c.gray(p.label)}`);
   }
   console.log(c.gray(`\n  stored in ${file} · kronos keys set NAME [value]`));
