@@ -37,7 +37,8 @@ interface ConnectionTest {
 const ORDER = ['anthropic', 'openai', 'gemini', 'openrouter', 'deepseek', 'xai', 'mistral', 'groq', 'ollama', 'lmstudio'];
 
 export function ProviderLogo({ id, label, size = 30 }: { id: string; label: string; size?: number }) {
-  const svg = PROVIDER_LOGOS[id];
+  // providers connected in the engine show under `engine-<provider>`: same logo as the provider itself
+  const svg = PROVIDER_LOGOS[id] ?? PROVIDER_LOGOS[id.replace(/^engine-/, '')];
   // The built-in free models carry the Kronos mark.
   if (id === 'cloud' || id === 'free') {
     return (

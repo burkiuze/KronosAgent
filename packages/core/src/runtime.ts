@@ -37,6 +37,7 @@ import { CronScheduler, type CronJob } from './cron/scheduler.js';
 import { McpManager } from './mcp/manager.js';
 import { createBackend, ProcessManager, type ExecBackend } from './backends/terminal.js';
 import { OpencodeManager } from './backends/opencode.js';
+import { EngineClient } from './engine/client.js';
 import { detectSandbox, ensureNetworkProxy, proxiedNetwork } from './backends/sandbox.js';
 import { Agent, type AgentOptions } from './agent/agent.js';
 import { loadAgentDefinitions, type AgentDefinition } from './agent/definitions.js';
@@ -200,9 +201,17 @@ export class Kronos {
       // Authenticate the Zen provider right away from any credential already on disk (cheap, no
       // network) so the first message works on every surface.
       k.opencode.discoverToken();
+      // While the engine serves, the free models (and the providers connected in the engine) run on it.
+      k.providers.setEngine(() => k.engineClient());
       // Only a host that opts into installing or serving (the desktop app) runs the background
       // engine and the live model sync — CLI/gateway/tests stay offline and side-effect free.
       if (k.config.opencode.autoInstall || k.config.opencode.serve) {
+        // the engine runs Kronos's skills: bundled ones and the user's own
+        try {
+          k.opencode.syncSkills([bundledSkillsDir(), k.paths.skills]);
+        } catch (e) {
+          log.warn('could not sync skills to the engine', e);
+        }
         void k.opencode
           .start()
           .then(() => k.syncOpencodeModels())
@@ -214,9 +223,25 @@ export class Kronos {
     return k;
   }
 
-  /** Pull opencode's current models (live Zen catalog + its own config) into the provider registry. */
+  /** Client for the embedded engine's server, while it is up. */
+  engineClient(): EngineClient | undefined {
+    const st = this.opencode?.status();
+    return st?.serving && st.serverUrl ? new EngineClient(st.serverUrl) : undefined;
+  }
+
+  /** Pull the engine's current models into the provider registry (and refresh the pickers). */
   async syncOpencodeModels(): Promise<void> {
     if (!this.opencode) return;
+    const client = this.engineClient();
+    if (client) {
+      try {
+        this.providers.setEngineModels(await client.withDirectory(this.workspace()).models());
+        this.events.emit({ type: 'config_changed' });
+      } catch (e) {
+        log.warn('could not read the engine models', e);
+      }
+      return;
+    }
     try {
       await this.providers.listModels('free').catch(() => undefined);
       const { models } = this.opencode.configuredModels();

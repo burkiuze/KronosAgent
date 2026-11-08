@@ -214,6 +214,8 @@ export interface ModelInfo {
   tags?: string[];
   /** listed but not usable yet: Kronos Cloud models before sign-in or without a membership */
   locked?: 'sign_in' | 'membership';
+  /** display name of the model's provider group, for providers that are not in the catalog */
+  providerLabel?: string;
 }
 
 export interface ChatRequest {

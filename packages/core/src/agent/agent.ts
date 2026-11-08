@@ -48,6 +48,7 @@ import { estimateMessagesTokens, estimateTokens, redactSecrets, truncate, trunca
 import { costOf } from '../providers/catalog.js';
 import { NotConnectedError } from '../providers/errors.js';
 import { logger } from '../util/log.js';
+import { runEngineTurn } from '../engine/turn.js';
 
 const log = logger('agent');
 
@@ -558,6 +559,22 @@ export class Agent {
     return decision;
   }
 
+  /** Identity and user instructions sent with every engine turn. */
+  private engineInstructions(): string {
+    const cfg = this.rt.config.agent;
+    const lines = [`You are ${cfg.name || 'Kronos'}, the user's AI agent. Refer to yourself as ${cfg.name || 'Kronos'}.`];
+    if (cfg.language && cfg.language !== 'auto') lines.push(`Reply in ${cfg.language}.`);
+    if (cfg.instructions?.trim()) lines.push(cfg.instructions.trim());
+    return lines.join('\n');
+  }
+
+  /** Engine permission requests follow the Kronos permission mode before anyone is asked. */
+  private engineDecision(req: Omit<PermissionRequest, 'requestId' | 'sessionId'>): Promise<PermissionDecision> {
+    if (this.mode === 'yolo') return Promise.resolve({ decision: 'allow' });
+    if (this.mode === 'auto-edit' && req.risk === 'write') return Promise.resolve({ decision: 'allow' });
+    return this.askPermission(req);
+  }
+
   private async askClarify(question: string, options?: string[]): Promise<string> {
     if (!this.opts.onClarify) return '';
     const request: ClarifyRequest = { requestId: newId('ask_'), sessionId: this.session.id, question, options };
@@ -677,6 +694,38 @@ export class Agent {
       const userMsg: Message = { id: newId('m_'), role: 'user', parts: userParts, createdAt: Date.now(), meta: inp.meta };
       this.append([userMsg]);
       this.emit({ type: 'message', runId, message: userMsg });
+
+      // Models that run on the embedded engine: the engine runs this turn (model calls, tools,
+      // permissions); Kronos streams it to the UI and keeps the history.
+      const engineModel = this.depth === 0 ? this.rt.providers.engineModelRef(model) : undefined;
+      const engine = engineModel ? this.rt.engineClient() : undefined;
+      if (engineModel && engine) {
+        const r = await runEngineTurn({
+          client: engine.withDirectory(this.session.cwd),
+          runId,
+          modelRef: model.ref,
+          model: engineModel,
+          contextWindow: model.contextWindow,
+          engineSessionId: typeof this.session.meta?.engineSession === 'string' ? (this.session.meta.engineSession as string) : undefined,
+          onEngineSession: (id) => this.saveSession({ meta: { ...this.session.meta, engineSession: id } }),
+          title: this.session.title && this.session.title !== 'New conversation' ? this.session.title : undefined,
+          text: userText,
+          images: inp.images,
+          files: inp.files,
+          system: this.engineInstructions(),
+          agent: this.mode === 'plan' ? 'plan' : undefined,
+          signal,
+          emit: (e) => this.emit(e),
+          onMessage: (m) => {
+            this.append([m]);
+            this.emit({ type: 'message', runId, message: m });
+          },
+          askPermission: (req) => this.engineDecision(req),
+        });
+        if (r.error) this.notice('error', r.error);
+        if (r.engineTitle && (!this.session.title || this.session.title === 'New conversation')) this.rename(r.engineTitle);
+        return this.finish(runId, started, r.text, r.stopReason, r.usage, r.error, r.toolCalls);
+      }
 
       // Codemaster: max effort plus a rigorous workflow, announced when it is switched on or off
       const codemaster = cfg.model.effort === 'codemaster' && this.depth === 0;

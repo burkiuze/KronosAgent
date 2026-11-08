@@ -92,6 +92,8 @@ export interface ModelInfo {
   tags?: string[];
   /** Kronos Cloud: listed but needs sign-in or a membership */
   locked?: 'sign_in' | 'membership';
+  /** display name of the provider group, for providers that are not in the catalog */
+  providerLabel?: string;
 }
 
 export interface PermissionRequest {

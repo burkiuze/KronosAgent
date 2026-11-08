@@ -5,6 +5,8 @@ import { OpenAICompatProvider } from './openai.js';
 import { DemoProvider } from './demo.js';
 import { PROVIDERS, catalogModels, genericModel, getPreset, guessProviderForModel, parseModelRef, costOf } from './catalog.js';
 import { MissingCredentialsError, ProviderError } from './errors.js';
+import { EngineProvider } from '../engine/provider.js';
+import { ENGINE_HOSTED_PROVIDER, type EngineClient, type EngineModel, type EngineModelRef } from '../engine/client.js';
 import { sleep, isAbortError } from '../util/misc.js';
 import { logger } from '../util/log.js';
 
@@ -81,7 +83,59 @@ export class ProviderRegistry {
 
   private cloud?: CloudAccess;
 
+  /** The embedded engine: while it runs, the free models and the engine's connected providers run on it. */
+  private engineClient?: () => EngineClient | undefined;
+  private engineModels: ModelInfo[] = [];
+  private engineProviders = new Map<string, { label: string; engineId: string }>();
+
   constructor(private config: KronosConfig) {}
+
+  setEngine(client: () => EngineClient | undefined): void {
+    this.engineClient = client;
+    this.cache.delete('free');
+    for (const id of this.engineProviders.keys()) this.cache.delete(id);
+  }
+
+  /** Whether the engine is up right now. */
+  engineActive(): boolean {
+    return Boolean(this.engineClient?.());
+  }
+
+  /**
+   * Replace the engine's model list. The hosted service's free models become the "free" group; every
+   * other provider connected in the engine becomes its own group (`engine-<provider>`).
+   */
+  setEngineModels(models: EngineModel[]): void {
+    const providers = new Map<string, { label: string; engineId: string }>();
+    const infos: ModelInfo[] = [];
+    for (const m of models) {
+      const kronosId = m.providerID === ENGINE_HOSTED_PROVIDER ? 'free' : `engine-${m.providerID.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
+      if (kronosId !== 'free') providers.set(kronosId, { label: m.providerName, engineId: m.providerID });
+      infos.push({
+        ref: `${kronosId}:${m.id}`,
+        provider: kronosId,
+        id: m.id,
+        name: m.name,
+        contextWindow: m.contextWindow,
+        maxOutput: m.maxOutput,
+        tools: m.tools,
+        vision: m.vision,
+        reasoning: m.reasoning ? 'openai' : 'none',
+        ...(kronosId === 'free' ? {} : { providerLabel: m.providerName }),
+        ...(kronosId === 'free' && m.id === 'big-pickle' ? { tags: ['recommended'] } : {}),
+      });
+    }
+    for (const id of new Set([...this.engineProviders.keys(), ...providers.keys(), 'free'])) this.cache.delete(id);
+    this.engineProviders = providers;
+    this.engineModels = infos;
+  }
+
+  /** The engine model behind a Kronos model, when that model runs on the engine. */
+  engineModelRef(model: ModelInfo): EngineModelRef | undefined {
+    if (model.provider === 'free') return { providerID: ENGINE_HOSTED_PROVIDER, modelID: model.id };
+    const p = this.engineProviders.get(model.provider);
+    return p ? { providerID: p.engineId, modelID: model.id } : undefined;
+  }
 
   setCloud(cloud: CloudAccess): void {
     this.cloud = cloud;
@@ -153,6 +207,7 @@ export class ProviderRegistry {
 
   isConfigured(id: string): boolean {
     if (id === 'kronos') return true;
+    if (this.engineProviders.has(id)) return true;
     if (id === 'cloud') return !this.cloudLock();
     const preset = getPreset(id);
     const custom = this.config.customProviders.find((c) => c.id === id);
@@ -182,7 +237,7 @@ export class ProviderRegistry {
   }
 
   knownProviderIds(): string[] {
-    return [...PROVIDERS.map((p) => p.id), ...this.config.customProviders.map((c) => c.id)];
+    return [...PROVIDERS.map((p) => p.id), ...this.config.customProviders.map((c) => c.id), ...this.engineProviders.keys()];
   }
 
   get(id: string): Provider {
@@ -199,6 +254,9 @@ export class ProviderRegistry {
     const custom = this.config.customProviders.find((c) => c.id === id);
     const preset = getPreset(id);
     const cfg = this.config.providers[id] ?? {};
+    if ((id === 'free' && this.engineActive()) || this.engineProviders.has(id)) {
+      return new EngineProvider(id, () => this.engineClient?.(), (m) => this.engineModelRef(m));
+    }
     if (custom) {
       provider =
         custom.api === 'anthropic'
@@ -278,10 +336,14 @@ export class ProviderRegistry {
       if (r === 'auto') r = this.autoModelRef();
     }
     r = aliasFor(r) ?? r;
+    // an engine model referenced before the engine reported its models (startup, engine down):
+    // keep it on its own provider so it is never sent to a different model
+    const engineRef = /^(engine-[a-z0-9-]+):(.+)$/.exec(r);
+    if (engineRef && !this.engineProviders.has(engineRef[1]!)) return { ...genericModel(engineRef[1]!, engineRef[2]!), ref: r };
     let { provider, model } = parseModelRef(r, this.knownProviderIds());
     if (!provider) provider = guessProviderForModel(model) ?? parseModelRef(this.autoModelRef()).provider ?? 'kronos';
     if (!model) model = getPreset(provider)?.defaultModel ?? model;
-    const all = [...catalogModels(), ...(this.liveModels.get(provider) ?? [])];
+    const all = [...this.engineModels, ...catalogModels(), ...(this.liveModels.get(provider) ?? [])];
     const found = all.find((m) => m.provider === provider && m.id === model);
     if (found) return found;
     // OpenRouter ids embed a vendor model we may know about
@@ -312,10 +374,17 @@ export class ProviderRegistry {
   async listModels(providerId?: string): Promise<ModelInfo[]> {
     const catalog = catalogModels();
     // Kronos Cloud models are always listed; without sign-in or a membership they show as locked
-    const ids = providerId ? [providerId] : [...new Set([...this.statuses().filter((s) => s.configured).map((s) => s.id), 'cloud'])];
+    const ids = providerId ? [providerId] : [...new Set([...this.statuses().filter((s) => s.configured).map((s) => s.id), ...this.engineProviders.keys(), 'cloud'])];
     const out: ModelInfo[] = [];
     const lock = this.cloudLock();
+    const engineFree = this.engineModels.some((m) => m.provider === 'free');
     for (const id of ids) {
+      // the engine's own list is authoritative for the models that run on it
+      const fromEngine = this.engineModels.filter((m) => m.provider === id);
+      if (fromEngine.length || this.engineProviders.has(id) || (id === 'free' && engineFree)) {
+        out.push(...fromEngine);
+        continue;
+      }
       const known = catalog.filter((m) => m.provider === id).map((m) => (id === 'cloud' && lock ? { ...m, locked: lock } : m));
       out.push(...known);
       const custom = this.config.customProviders.find((c) => c.id === id);

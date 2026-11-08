@@ -86,8 +86,8 @@ export function ModelPicker({ children, compact, down }: { children: ReactNode; 
               {groups.map(([provider, list]) => (
                 <div key={provider}>
                   <div className="model-group">
-                    <ProviderLogo id={provider} label={providers.find((p) => p.id === provider)?.label ?? provider} size={18} />
-                    {providers.find((p) => p.id === provider)?.label ?? provider}
+                    <ProviderLogo id={provider} label={providers.find((p) => p.id === provider)?.label ?? list[0]?.providerLabel ?? provider} size={18} />
+                    {providers.find((p) => p.id === provider)?.label ?? list[0]?.providerLabel ?? provider}
                   </div>
                   {list.map((m) => (
                     <button key={m.ref} className={`model-row ${m.ref === current ? 'active' : ''} ${m.locked ? 'locked' : ''}`} onClick={() => void choose(m.ref)} title={m.locked ? (m.locked === 'sign_in' ? 'Sign in to unlock' : 'Needs a membership') : undefined}>

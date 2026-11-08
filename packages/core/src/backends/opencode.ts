@@ -16,10 +16,11 @@
  * only ever shows Kronos branding.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, watch, type FSWatcher } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import { createWriteStream } from 'node:fs';
+import { createServer } from 'node:net';
 import { which, runShell, runProcess } from '../util/process.js';
 import { logger } from '../util/log.js';
 
@@ -115,11 +116,24 @@ export class OpencodeManager {
     return join(this.installDir(), 'bin', IS_WIN ? 'opencode.exe' : 'opencode');
   }
 
+  /** Binary of the managed npm install (the preferred install: Kronos already needs Node.js). */
+  private npmBinary(): string {
+    return join(this.installDir(), 'node_modules', '.bin', IS_WIN ? 'opencode.cmd' : 'opencode');
+  }
+
+  private isNpmInstall(bin: string | undefined): boolean {
+    return Boolean(bin && bin === this.npmBinary());
+  }
+
+  /** Engine config directory owned by Kronos (OPENCODE_CONFIG_DIR): bundled skills live here. */
+  configDir(): string {
+    return join(this.installDir(), 'config');
+  }
+
   /** Locate an opencode binary: a previous managed install first, then one already on PATH. */
   async locate(): Promise<string | undefined> {
     if (this.binary && existsSync(this.binary)) return this.binary;
-    const managed = this.managedBinary();
-    if (existsSync(managed)) return (this.binary = managed);
+    for (const managed of [this.npmBinary(), this.managedBinary()]) if (existsSync(managed)) return (this.binary = managed);
     const onPath = await which('opencode');
     if (onPath) return (this.binary = onPath);
     return undefined;
@@ -135,14 +149,16 @@ export class OpencodeManager {
       const dir = this.installDir();
       mkdirSync(join(dir, 'bin'), { recursive: true });
       const env = { ...process.env, OPENCODE_INSTALL_DIR: dir, OPENCODE_DISABLE_AUTOUPDATE: '1' };
+      // npm first: Node.js is already installed for Kronos, and npm pins exact, verifiable versions
+      const npm = `npm install --prefix "${dir}" --no-audit --no-fund --loglevel=error opencode-ai`;
       const attempts: { label: string; cmd: string }[] = IS_WIN
         ? [
+            { label: 'npm', cmd: npm },
             { label: 'official installer', cmd: 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://opencode.ai/install.ps1 | iex"' },
-            { label: 'npm', cmd: `npm install --prefix "${dir}" opencode-ai` },
           ]
         : [
+            { label: 'npm', cmd: npm },
             { label: 'official installer', cmd: 'curl -fsSL https://opencode.ai/install | bash' },
-            { label: 'npm', cmd: `npm install --prefix "${dir}" opencode-ai` },
           ];
       for (const a of attempts) {
         try {
@@ -150,8 +166,7 @@ export class OpencodeManager {
           const r = await runShell(a.cmd, { env, timeoutMs: 180_000 });
           if (r.exitCode === 0) {
             // installer writes to <dir>/bin; npm writes to <dir>/node_modules/.bin
-            const npmBin = join(dir, 'node_modules', '.bin', IS_WIN ? 'opencode.cmd' : 'opencode');
-            const found = [this.managedBinary(), npmBin].find((p) => existsSync(p)) ?? (await which('opencode')) ?? undefined;
+            const found = [this.npmBinary(), this.managedBinary()].find((p) => existsSync(p)) ?? (await which('opencode')) ?? undefined;
             if (found) {
               log.info(`opencode installed at ${found}`);
               return (this.binary = found);
@@ -197,6 +212,62 @@ export class OpencodeManager {
       }
     }
     return false;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // skills — the engine runs Kronos's skills (same SKILL.md format), copied flat into its config dir
+
+  /**
+   * Copy every skill (a folder with a SKILL.md, at any depth) from `sources` into the engine's
+   * skills directory, flat by folder name — the engine does not scan nested category folders.
+   * Skills this method copied before but that no longer exist are removed; anything else in the
+   * directory is left alone. Returns the number of skills synced.
+   */
+  syncSkills(sources: (string | undefined)[]): number {
+    const target = join(this.configDir(), 'skills');
+    const markerFile = join(target, '.kronos-managed.json');
+    mkdirSync(target, { recursive: true });
+    let previous: string[] = [];
+    try {
+      previous = JSON.parse(readFileSync(markerFile, 'utf8'));
+    } catch {
+      /* first sync */
+    }
+    const found = new Map<string, string>();
+    const walk = (dir: string, depth: number) => {
+      if (depth > 4) return;
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return;
+      }
+      if (entries.includes('SKILL.md')) {
+        found.set(basename(dir), dir);
+        return;
+      }
+      for (const e of entries) {
+        if (e.startsWith('.') || e === 'node_modules') continue;
+        const full = join(dir, e);
+        try {
+          if (statSync(full).isDirectory()) walk(full, depth + 1);
+        } catch {
+          /* unreadable entry */
+        }
+      }
+    };
+    for (const src of sources) if (src && existsSync(src)) walk(src, 0);
+    for (const name of previous) if (!found.has(name)) rmSync(join(target, name), { recursive: true, force: true });
+    for (const [name, dir] of found) {
+      try {
+        rmSync(join(target, name), { recursive: true, force: true });
+        cpSync(dir, join(target, name), { recursive: true });
+      } catch (e) {
+        log.debug(`could not copy skill ${name}`, e);
+      }
+    }
+    writeFileSync(markerFile, JSON.stringify([...found.keys()].sort(), null, 2));
+    return found.size;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -288,29 +359,44 @@ export class OpencodeManager {
     }
   }
 
+  /** Latest version on npm (only for the managed npm install; other installs report none). */
+  private async latestNpmVersion(): Promise<string | undefined> {
+    try {
+      const r = await runShell('npm view opencode-ai version', { timeoutMs: 30_000 });
+      const v = /\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*/.exec(r.stdout)?.[0];
+      return r.exitCode === 0 ? v : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
-   * Check whether a newer opencode is available, best-effort via `opencode upgrade --check`.
-   * Auto-update is disabled (OPENCODE_DISABLE_AUTOUPDATE), so nothing is changed here — the host
-   * decides whether to call `update()`. When availability can't be determined, reports none.
+   * Check whether a newer engine is available. Auto-update is disabled (OPENCODE_DISABLE_AUTOUPDATE),
+   * so nothing is changed here — the host asks the user and then calls `update()`. For the managed
+   * npm install the latest version comes from npm; otherwise `upgrade --check` is asked, best-effort.
+   * When availability can't be determined, reports none.
    */
   async checkForUpdate(): Promise<{ current?: string; latest?: string; updateAvailable: boolean }> {
     const current = await this.version();
     const bin = await this.locate();
     if (!bin) return { current, updateAvailable: false };
+    if (this.isNpmInstall(bin)) {
+      const latest = await this.latestNpmVersion();
+      return { current, latest, updateAvailable: Boolean(latest && current && latest !== current) };
+    }
     try {
       const r = await runProcess(bin, ['upgrade', '--check'], { timeoutMs: 30_000 });
       const text = `${r.stdout}\n${r.stderr}`;
-      const latest = /(?:latest|available|new version)[^\d]*(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*)/i.exec(text)?.[1] ?? /\bv?(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*)\b/.exec(text)?.[1];
+      const latest = /(?:latest|available|new version)[^\d]*(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*)/i.exec(text)?.[1];
       const upToDate = /up[- ]?to[- ]?date|already.*latest|no update/i.test(text);
-      const updateAvailable = Boolean(latest && current && latest !== current) || (!upToDate && /available|new version/i.test(text));
-      return { current, latest, updateAvailable };
+      return { current, latest, updateAvailable: !upToDate && Boolean(latest && current && latest !== current) };
     } catch (e) {
       log.debug('opencode upgrade --check failed', e);
       return { current, updateAvailable: false };
     }
   }
 
-  /** Apply an opencode upgrade. Stops/restarts the background server around it. Returns the new version. */
+  /** Apply an engine upgrade. Stops/restarts the background server around it. Returns the new version. */
   async update(): Promise<{ ok: boolean; version?: string }> {
     const bin = await this.locate();
     if (!bin) return { ok: false };
@@ -318,46 +404,84 @@ export class OpencodeManager {
     await this.stop();
     let ok = false;
     try {
-      const r = await runProcess(bin, ['upgrade'], { timeoutMs: 180_000, env: { ...process.env, OPENCODE_DISABLE_AUTOUPDATE: '1' } });
+      const r = this.isNpmInstall(bin)
+        ? await runShell(`npm install --prefix "${this.installDir()}" --no-audit --no-fund --loglevel=error opencode-ai@latest`, { timeoutMs: 300_000 })
+        : await runProcess(bin, ['upgrade'], { timeoutMs: 180_000, env: { ...process.env, OPENCODE_DISABLE_AUTOUPDATE: '1' } });
       ok = r.exitCode === 0;
-      if (!ok) log.warn(`opencode upgrade exited ${r.exitCode}: ${(r.stderr || r.output).slice(0, 300)}`);
+      if (!ok) log.warn(`engine upgrade exited ${r.exitCode}: ${(r.stderr || r.output).slice(0, 300)}`);
     } catch (e) {
-      log.warn('opencode upgrade failed', e);
+      log.warn('engine upgrade failed', e);
     }
     if (wasServing) await this.startServe();
     return { ok, version: await this.version() };
   }
 
-  /** Start `opencode serve` in the background. No-op if already running or no binary is available. */
+  /** Start `opencode serve` in the background and wait until it answers. No-op if already running. */
   async startServe(): Promise<string | undefined> {
     if (this.child && !this.child.killed) return this.serverUrl();
     const bin = await this.ensureInstalled();
     if (!bin) return undefined;
+    // another engine (e.g. the user's own) may already hold the port: take a free one instead
+    if (!(await portFree(this.port))) this.port = await freePort();
     mkdirSync(join(this.opts.home, 'opencode', 'logs'), { recursive: true });
+    mkdirSync(this.configDir(), { recursive: true });
     const logFile = join(this.opts.home, 'opencode', 'logs', 'serve.log');
     const out = createWriteStream(logFile, { flags: 'a' });
-    const env = { ...process.env, PATH: `${join(this.installDir(), 'bin')}${delimiter}${process.env.PATH ?? ''}` };
+    const env = {
+      ...process.env,
+      PATH: `${join(this.installDir(), 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+      OPENCODE_CONFIG_DIR: this.configDir(),
+      OPENCODE_DISABLE_AUTOUPDATE: '1',
+    };
     try {
       const child = spawn(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(this.port)], {
         env,
         cwd: this.opts.home,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        // npm's Windows shim is a .cmd script, which only starts through a shell
+        shell: IS_WIN && /\.(cmd|bat)$/i.test(bin),
       });
       child.stdout?.pipe(out);
       child.stderr?.pipe(out);
       child.on('exit', (code) => {
         log.warn(`opencode serve exited (${code})`);
-        if (this.child === child) this.child = null;
+        if (this.child === child) {
+          this.child = null;
+          this.ready = false;
+        }
       });
       child.on('error', (e) => log.warn('opencode serve error', e));
       this.child = child;
+      if (!(await this.waitReady(30_000))) {
+        log.warn(`opencode serve did not answer on ${this.serverUrl()} (logs: ${logFile})`);
+        return undefined;
+      }
+      this.ready = true;
       log.info(`opencode serve started on ${this.serverUrl()} (logs: ${logFile})`);
       return this.serverUrl();
     } catch (e) {
       log.warn('failed to start opencode serve', e);
       return undefined;
     }
+  }
+
+  private ready = false;
+
+  /** Poll the server's health endpoint until it answers (or the process exits / time runs out). */
+  private async waitReady(timeoutMs: number): Promise<boolean> {
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+      if (!this.child || this.child.killed || this.child.exitCode !== null) return false;
+      try {
+        const res = await fetch(`${this.serverUrl()}/global/health`, { signal: AbortSignal.timeout(1500) });
+        if (res.ok) return true;
+      } catch {
+        /* not up yet */
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return false;
   }
 
   serverUrl(): string {
@@ -380,8 +504,8 @@ export class OpencodeManager {
     return {
       installed: Boolean(this.binary),
       binary: this.binary,
-      serving: Boolean(this.child && !this.child.killed),
-      serverUrl: this.child && !this.child.killed ? this.serverUrl() : undefined,
+      serving: Boolean(this.ready && this.child && !this.child.killed && this.child.exitCode === null),
+      serverUrl: this.ready && this.child && !this.child.killed ? this.serverUrl() : undefined,
       authed: Boolean(process.env[this.tokenEnv]),
     };
   }
@@ -390,6 +514,7 @@ export class OpencodeManager {
   async stop(): Promise<void> {
     const child = this.child;
     this.child = null;
+    this.ready = false;
     if (!child || child.killed) return;
     try {
       child.kill('SIGTERM');
@@ -397,4 +522,23 @@ export class OpencodeManager {
       /* already gone */
     }
   }
+}
+
+function portFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = createServer();
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
+  });
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as { port: number }).port;
+      srv.close(() => resolve(port));
+    });
+  });
 }

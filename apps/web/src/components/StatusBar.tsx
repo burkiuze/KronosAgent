@@ -94,5 +94,6 @@ function modelLabel(ref: string | undefined, fallback?: string): string {
 }
 
 function providerOf(ref?: string): string {
-  return ref?.split(':')[0] ?? '';
+  // providers connected in the engine are `engine-<provider>`: show the provider's own name
+  return (ref?.split(':')[0] ?? '').replace(/^engine-/, '');
 }
